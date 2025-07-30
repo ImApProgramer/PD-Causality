@@ -11,7 +11,7 @@ import pandas as pd
 
 from const import path
 from data.utility import *
-#from data.data_augmentation import *
+#from data.data_augmentation import *  #0731:这一行根本没用到，而且报错，注释掉
 from data.public_pd_datareader import PDReader
 from data.augmentations import MirrorReflection, RandomRotation, RandomNoise, axis_mask
 from learning.utils import compute_class_weights
