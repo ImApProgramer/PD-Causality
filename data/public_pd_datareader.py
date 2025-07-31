@@ -31,8 +31,9 @@ class PDReader():
 
     def read_label(self, file_name):
         subject_id, on_or_off = file_name.split("_")[:2]
-        df = pd.read_excel(self.labels_path)
-        # df = pd.read_csv(self.labels_path, delimiter=self.DELIMITER)
+        #df = pd.read_excel(self.labels_path)
+        df = pd.read_csv(self.labels_path)      #这里设置的deliminater有问题，导致报错
+        #print(df.columns)
         df = df[['ID', self.ON_LABEL_COLUMN, self.OFF_LABEL_COLUMN]]
         subject_rows = df[df['ID'] == subject_id]
         if on_or_off == "on":
@@ -44,8 +45,10 @@ class PDReader():
     def read_metadata(self, file_name):
         #If you change this function make sure to adjust the METADATA_MAP in the dataloaders.py accordingly
         subject_id = file_name.split("_")[0]
-        df = pd.read_excel(self.labels_path)
+        #df = pd.read_excel(self.labels_path)
+        df = pd.read_csv(self.labels_path)        #这一行也是一样
         df = df[['ID', 'Gender', 'Age', 'Height (cm)', 'Weight (kg)', 'BMI (kg/m2)']]
+        print(df)
         df.rename(columns={
             "Gender": "gender",
             "Age": "age",

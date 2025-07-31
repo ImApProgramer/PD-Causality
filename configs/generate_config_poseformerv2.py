@@ -66,6 +66,7 @@ def generate_config(param, f_name):
                 "Error: One of the config parameters in " + "./Configs/" + f_name + " does not match code!")
         params[p] = new_param[p]
 
+    #这个真的搞不明白，为啥这个需要两个是一样的？
     params['labels_path'] = params['data_path']  # Data Path is the path to csv files by default
 
     params['model_prefix'] = params['model_prefix'] + f_name.split('.json')[0]

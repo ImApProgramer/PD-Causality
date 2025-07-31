@@ -726,8 +726,11 @@ def dataset_factory(params, backbone, fold):
         PreserveKeysTransform(transforms.RandomApply([axis_mask(data_dim=params['in_data_dim'])], p=params['axis_mask_prob']))
     ])
 
+    if 'metadata' not in params:            #用于修复metadata错误，权宜之计，后面一定要回来改
+        params['metadata'] = []
+
     train_dataset = ProcessedDataset(data_dir, fold=fold, params=params,
-                                            mode='train' if use_validation else 'train-eval', transform=train_transform)
+                                            mode='train' if use_validation else 'train-eval', transform=train_transform)        #这里传入的时候params根本没有metadata这一项，导致报错
     eval_dataset = ProcessedDataset(data_dir, fold=fold, params=params, mode='val') if use_validation else None
     test_dataset = ProcessedDataset(data_dir, fold=fold, params=params, mode='test')
     
