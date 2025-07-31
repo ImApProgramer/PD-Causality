@@ -412,7 +412,7 @@ class PoseformerV2Preprocessor(DataPreprocessor):
         self.remove_last_dim_of_pose()
         self.normalize_poses()
         clip_dict = self.partition_videos(clip_length=self.params['source_seq_len'])
-        self.generate_leave_one_out_folds(clip_dict, save_dir)
+        self.generate_leave_one_out_folds(clip_dict, save_dir,raw_data.labels_dict)
 
     def remove_last_dim_of_pose(self):
         for video_name in self.pose_dict:
@@ -573,7 +573,7 @@ class ProcessedDataset(data.Dataset):
         # can't stack poses because not all have equal frames
         labels = np.stack(labels)
         video_names = np.stack(video_names)
-        metadatas = np.stack(metadatas)
+        metadatas = np.stack(metadatas)     #这里metadata是有值的，为啥到了train.py里面就没有了？
 
         # For using a subset of the dataset (few-shot)
         # if mode == 'train':
@@ -726,8 +726,7 @@ def dataset_factory(params, backbone, fold):
         PreserveKeysTransform(transforms.RandomApply([axis_mask(data_dim=params['in_data_dim'])], p=params['axis_mask_prob']))
     ])
 
-    if 'metadata' not in params:            #用于修复metadata错误，权宜之计，后面一定要回来改
-        params['metadata'] = []
+    params['metadata'] = ['gender', 'age', 'height', 'weight', 'bmi']       #修改这一行用于稍后的ProcessedDataset不要出错;经过验证后面确实提取出了正确的metadata数据;但是发现在eval_encoder中实际上处理了
 
     train_dataset = ProcessedDataset(data_dir, fold=fold, params=params,
                                             mode='train' if use_validation else 'train-eval', transform=train_transform)        #这里传入的时候params根本没有metadata这一项，导致报错

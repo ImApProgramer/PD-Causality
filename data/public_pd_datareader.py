@@ -48,7 +48,7 @@ class PDReader():
         #df = pd.read_excel(self.labels_path)
         df = pd.read_csv(self.labels_path)        #这一行也是一样
         df = df[['ID', 'Gender', 'Age', 'Height (cm)', 'Weight (kg)', 'BMI (kg/m2)']]
-        print(df)
+        #print(df)
         df.rename(columns={
             "Gender": "gender",
             "Age": "age",

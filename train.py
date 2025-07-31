@@ -165,7 +165,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     scheduler = choose_scheduler(optimizer, params)
     
     checkpoint_root_path = os.path.join(path.OUT_PATH, params['model_prefix'],'models')
-    if not os.path.exists(checkpoint_root_path): os.mkdir(checkpoint_root_path)
+    if not os.path.exists(checkpoint_root_path): os.makedirs(checkpoint_root_path)      #原本的mkdir只能创建单级目录
 
     loop = tqdm(range(params['epochs']), desc=f'Training (fold{fold})', unit="epoch")
     for epoch in loop:
@@ -181,7 +181,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
         epoch_start_time = time.time()
         for x, y, video_idx, metadata in train_loader:
             x, y = x.to(device), y.to(device)
-            metadata = metadata.to(device)
+            metadata = metadata.to(device)      #metadata是空的！已经修复
 
             
             batch_size = x.shape[0]

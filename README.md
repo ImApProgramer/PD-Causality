@@ -64,4 +64,49 @@ KeyError: 'metadata'
 
 ## 训练
 
+尝试运行:`python /root/.pycharm_helpers/pydev/pydevd.py --multiprocess --qt-support=auto --client localhost --port 43015 --file /root/MotionEncoders_parkinsonism_benchmark-main/eval_encoder.py --backbone poseformer --medication 1`
 
+------
+k-fold cross-validation 是一种评估模型泛化能力的方法。
+
+它的基本思想是：
+>把原始数据集划分成 k 份（folds），每次选择其中 1 份作为验证集，其余 k-1 份作为训练集，重复 k 次，最终将这 k 次的评估结果做平均，得出模型在“看不见数据”上的综合性能。
+------
+
+
+
+```css
+generate_leave_one_out_folds()                  # ← 主控入口：生成 leave-one-out 的多个fold数据集
+├── 检查/创建 save_dir                          # 创建用于保存fold数据的文件夹
+├── 构造 video_names_list                       # 获取所有clip的名称列表
+├── 准备 val_folds 信息                         # 从 val_xxx_folds.pkl 加载验证集分配（或初始化为空）
+│   └── val_folds_exists → pickle.load(...)    # 如果存在就加载，否则准备生成新的
+├── for j in range(len(participant_ID)):       # ← 遍历每个参与者，作为 test subject
+│   ├── 构造 train/val/test 空列表
+│   ├── subject_id = leave-one-out 当前被排除者
+│   ├── 构建 class_participants 映射            # 把每个参与者映射到其标签（用于分层采样验证集）
+│   ├── if not val_folds_exists:               # 若第一次生成验证集
+│   │   ├── 按 class_id 逐类随机采样 2人       # 保证 val 集分布均匀（stratified）
+│   │   └── 保存 val_subs_folds.append(...)
+│   └── else:
+│       └── 使用已有 val_subs = val_subs_folds[j]
+│
+│   ├── 遍历每个 clip_name → 分配到 train/val/test
+│   │   ├── if subject_id → test
+│   │   ├── elif in val_subs → val
+│   │   └── else → train
+│
+│   ├── train, val, test = generate_pose_label_videoname(...)   # 构造对应的输入格式
+│   └── 保存 train/test/val 到多个 pkl 文件
+│
+└── 保存 labels_dict, val_subs_folds → pkl    # 全部 fold 生成完毕后，统一存储标签和验证划分
+
+```
+
+
+**batch_size、batch和epoch的关系**：
+✅ 它们之间的关系：
+
+Batch	一小批训练数据，执行一次更新	20 张图像组成一个 batch，训练完就更新一次权重
+Epoch	完整训练集的一轮迭代（被分成多个 batch）	1000 张图像，batch_size = 20 → 50 个 batch 构成 1 epoch
+关系	一个 epoch 包含多个 batch	epoch = N × batch（直到遍历所有数据）

@@ -59,7 +59,7 @@ def configure_params_for_best_model(params, backbone_name):
         'weight_decay': 0.00057,
         'momentum': 0.66
     }
-    print_best_model_configuration(best_params, backbone_name)
+    #print_best_model_configuration(best_params, backbone_name) #KeyError: 'best_trial_number'
     update_params_with_best(params, best_params, backbone_name)
     return params
 
@@ -77,7 +77,11 @@ def update_params_with_best(params, best_params, backbone_name):
     params['classifier_hidden_dims'] = map_to_classifier_dim(backbone_name, 'option1')
     params['optimizer'] = best_params['optimizer']
     params['lr_head'] = best_params['lr']
-    params['lambda_l1'] = best_params['lambda_l1']
+    if 'lambda_l1' in best_params:
+        params['lambda_l1'] = best_params['lambda_l1']
+    else:
+        params['lambda_l1'] = 0.0  # 设置默认值
+
     params['epochs'] = best_params['num_epochs']
     params['criterion'] = 'WCELoss' if best_params['use_weighted_loss'] else 'CrossEntropyLoss'
     if params['optimizer'] in ['AdamW', 'Adam', 'RMSprop']:
@@ -131,7 +135,7 @@ def process_fold(fold, params, backbone_name, train_dataset_fn, val_dataset_fn, 
     
     checkpoint_root_path = os.path.join(path.OUT_PATH, params['model_prefix'],'models', f"fold{fold}")
     best_ckpt_path = os.path.join(checkpoint_root_path, 'best_epoch.pth.tr')
-    load_pretrained_weights(model, checkpoint=torch.load(best_ckpt_path)['model'])
+    load_pretrained_weights(model, checkpoint=torch.load(best_ckpt_path)['model'])      #这里报错了，只在第一个fold上跑完了20个epoch，只保存了latest_epoch.pth.tr，所以加载不出来
     model.cuda()
     outs, gts, logits, states, video_names = final_test(model, test_dataset_fn, params)
     total_outs_best.extend(outs)
@@ -223,7 +227,7 @@ def save_and_load_results(video_names, outputs_best, outputs_last, targets, outp
     get_stats(total_video_names, total_outs_last, output_dir, 'last')
 
 
-def test_and_report(params, new_params, all_folds, backbone_name, device):
+def test_and_report(params, new_params, all_folds, backbone_name, device):          #new_params没用到？怎么回事？
     params, rep_out = setup_experiment_path(params)
     params = configure_params_for_best_model(params, backbone_name)
     initialize_wandb(params)

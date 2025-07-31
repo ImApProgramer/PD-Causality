@@ -62,7 +62,7 @@ if __name__ == '__main__':
 
     param = vars(args)
     
-    param['metadata'] = param['metadata'].split(',') if param['metadata'] else []
+    param['metadata'] = param['metadata'].split(',') if param['metadata'] else []   #这里显式建立了metadata项，但是在可视化中却没有
 
     torch.backends.cudnn.benchmark = False
     
