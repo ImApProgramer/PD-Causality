@@ -168,6 +168,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     if not os.path.exists(checkpoint_root_path): os.makedirs(checkpoint_root_path)      #原本的mkdir只能创建单级目录
 
     loop = tqdm(range(params['epochs']), desc=f'Training (fold{fold})', unit="epoch")
+
+    best_val_f1 = 0.0   #最佳的f1分数
+
     for epoch in loop:
         # print(f"[INFO] epoch {epoch}")
         train_acc = AverageMeter()
@@ -241,10 +244,17 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
         log_wandb(epoch, fold, lr_backbone, train_acc, train_loss, 1, val_acc,
                 val_loss, val_f1_score)
+
+
+        if val_f1_score > best_val_f1:      #best模型的保存逻辑
+            best_val_f1 = val_f1_score
+            save_checkpoint(checkpoint_root_path, epoch, lr_backbone, optimizer, model,
+                            best_val_f1, fold, latest=False)
+            print(f"[INFO] Best checkpoint saved at epoch {epoch} with val_f1_score={val_f1_score:.4f}")
         
     if mode == "RUN":
         save_checkpoint(checkpoint_root_path, epoch, lr_backbone, optimizer, model, None, fold, latest=True)
-        print(f'Checkpoint saved at: {checkpoint_root_path}')
+        print(f'[INFO] Latest checkpoint saved at: {checkpoint_root_path}')
     
     
 
