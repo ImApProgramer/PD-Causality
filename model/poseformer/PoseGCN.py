@@ -43,6 +43,15 @@ sys.path.insert(0, thispath + "/../")
 from model import utils
 
 
+'''
+这个本质上是一个Transformer+ST-GCN混合结构
+大体上分为两路，先把输入的关节维度压平（为了方便注意力）:
+1. 送入Transformer，进行时间建模
+2. GCN恢复关节维度进行空间建模
+
+'''
+
+
 class GraphConvolution(nn.Module):
     """Implements graph convolutions."""
 

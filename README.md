@@ -530,3 +530,17 @@ wandb: You can sync this run to the cloud by running:
 wandb: wandb sync /root/MotionEncoders_parkinsonism_benchmark-main/wandb/offline-run-20250801_100615-5qdnqvsu
 wandb: Find logs at: ./wandb/offline-run-20250801_100615-5qdnqvsu/logs
 ```
+
+
+
+
+
+------
+打算看看把GCN接入进去，
+
+本文里的PoseFormer是一个跟GCN拼凑起来的模型，
+并且它是加载了一个PoseFormer的预训练数据`pre-trained_NTU_ckpt_epoch_199_enc_80_dec_20.pt`，来微调的，这个恐怕没法自己获取，官方提供的是Human3.6M，怎么办呢？要不要自己跑一遍？
+
+
+
+到底**要不要纯GCN**？

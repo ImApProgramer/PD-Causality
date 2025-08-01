@@ -492,6 +492,66 @@ class MixSTEPreprocessor(DataPreprocessor):
             clips.append(clip)
         return clips
 
+
+class CTRGCNPreprocessor(DataPreprocessor):                 #从MotionBert处理函数基础上修改
+    def __init__(self, save_dir, raw_data, params):
+        super().__init__(raw_data, params=params)
+
+        if self.params['data_centered']:
+            self.center_poses()
+        else:
+            self.place_depth_of_first_frame_to_zero()
+
+        clip_dict = self.partition_videos(clip_length=self.params['source_seq_len'])
+        self.generate_leave_one_out_folds(clip_dict, save_dir, raw_data.labels_dict)
+
+    def place_depth_of_first_frame_to_zero(self):
+        for key in self.pose_dict.keys():
+            joints3d = self.pose_dict[key]  # (n_frames, n_joints, 3)
+            joints3d[..., 2] = joints3d[..., 2] - joints3d[0:1, _ROOT:_ROOT + 1, 2]
+
+    def partition_videos(self, clip_length):            #只改了这个函数
+        """
+        Partition poses from each video into clips.
+        :return: dictionary of clips for each video
+        """
+        clip_dict = {}
+        for video_name in self.pose_dict.keys():
+            # 改为适配GCN：
+            clips = self.get_clips(self.pose_dict[video_name], clip_length)
+            transformed_clips = []
+            for clip in clips:
+                # clip: (T, J, 3)
+                clip_transposed = np.transpose(clip, (2, 0, 1))  # => (3, T, J)
+                clip_expanded = clip_transposed[..., np.newaxis]  # => (3, T, J, 1)
+                transformed_clips.append(clip_expanded)
+            clip_dict[video_name] = transformed_clips
+        return clip_dict
+
+    def get_clips(self, video_sequence, clip_length, data_stride=15):
+        data_stride = clip_length
+        clips = []
+        video_length = video_sequence.shape[0]
+        if video_length < clip_length:
+            pass
+            # new_indices = self.resample(video_length, clip_length)
+            # clips.append(video_sequence[new_indices])
+        else:
+            if self.params['select_middle']:
+                middle_frame = (video_length) // 2
+                start_frame = middle_frame - (clip_length // 2)
+                clip = video_sequence[start_frame: start_frame + clip_length]
+                clips.append(clip)
+            else:
+                start_frame = 0
+                while (video_length - start_frame) >= clip_length:
+                    clips.append(video_sequence[start_frame:start_frame + clip_length])
+                    start_frame += data_stride
+                # new_indices = self.resample(video_length - start_frame, clip_length) + start_frame
+                # clips.append(video_sequence[new_indices])
+        return clips
+
+
 class ProcessedDataset(data.Dataset):
     def __init__(self, data_dir, params=None, mode='train', fold=1, downstream='pd', transform=None):
         super(ProcessedDataset, self).__init__()
@@ -679,7 +739,7 @@ def dataset_factory(params, backbone, fold):
 
     root_dir = f'{path.PREPROCESSED_DATA_ROOT_PATH}/{backbone}_processing'
 
-    backbone_data_location_mapper = {
+    backbone_data_location_mapper = {                       #加GCN，要改
         'poseformer': os.path.join(root_dir, params['experiment_name'],
                                    f"{params['dataset']}_center_{params['data_centered']}_{params['data_norm']}/"),
         'motionbert': os.path.join(root_dir, params['experiment_name'],
@@ -692,7 +752,7 @@ def dataset_factory(params, backbone, fold):
                                      f"{params['dataset']}_center_{params['data_centered']}/"),
     }
 
-    backbone_preprocessor_mapper = {
+    backbone_preprocessor_mapper = {                        #加GCN，要改
         'poseformer': POTRPreprocessor,
         'motionbert': MotionBERTPreprocessor,
         'poseformerv2': PoseformerV2Preprocessor,
@@ -700,14 +760,20 @@ def dataset_factory(params, backbone, fold):
         'motionagformer': MotionAGFormerPreprocessor
     }
 
-    assert_backbone_is_supported(backbone_data_location_mapper, backbone)
+    assert_backbone_is_supported(backbone_data_location_mapper, backbone)       #这个后面得改，不然识别不了GCN
     
     data_dir = backbone_data_location_mapper[backbone]
 
     if not os.path.exists(data_dir):
         if params['dataset'] == 'PD':
             raw_data = PDReader(params['data_path'], params['labels_path']) 
-            
+
+
+            '''
+            上面这部分就是纯粹的“数据索引+标签”了，我们如何获取它到底是长啥样的？（尤其是骨架数据本身）
+            但是注意上面这部分不是起点，起点是preprocess_pd.py，然后才是上面的PDReader()
+            '''
+
             # if params['augmentation']:
             #     augmenter = PoseSequenceAugmentation(params)
             #     raw_data = augmenter.augment_data(raw_data, params['augmentation'])

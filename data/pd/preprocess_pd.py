@@ -11,6 +11,8 @@ from matplotlib import pyplot as plt
 import matplotlib
 from matplotlib.animation import FuncAnimation
 
+# TODO: 考虑一下需不需要改
+
 
 def convert_pd_h36m(sequence):
     new_keyponts = np.zeros((sequence.shape[0], 17, 3))
@@ -145,7 +147,7 @@ def read_pd(sequence_path, start_index, step):
             if np.any(np.all(points[:44, :3] == 0, axis=1)):   #Removed frames with corrupted joints
                 continue
             sequence.append(points[None, :44, :3])
-    if len(sequence) == 0:
+    if len(sequence) == 0:                                      #表示这一整个视频文件，没有任何非corrupted片段，不使用，并且记录起来
         print(sequence_path)
         with open('./data/pd/Removed_sequences.csv', 'a', newline='') as file:
             writer = csv.writer(file)
@@ -178,8 +180,8 @@ def main():
             if file.endswith('.c3d') and "walk" in file and file.startswith("SUB"):
                 sequence_path = os.path.join(root, file)
                 try:
-                    for start_index in range(3):
-                        sequence = read_pd(sequence_path, start_index, 3)
+                    for start_index in range(3):                                     #预处理的一种trick，同一段视频可以生成3段样本
+                        sequence = read_pd(sequence_path, start_index, 3)       #步长固定为3，看看后面要不要改？
                         if len(sequence) == 0:
                             continue
                         output_sequence_path = os.path.join(output_path_c3dfiles, f"{file[:-4]}_{start_index}")
