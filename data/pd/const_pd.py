@@ -64,3 +64,32 @@ PD = {
     'L.ANKLE.MEDIAL': 42,
     'L.MT2': 43
 }
+
+NTU_25 = {
+    'Base of Spine': 0,
+    'Mid Spine': 1,
+    'Neck': 2,
+    'Head': 3,
+    'Left Shoulder': 4,
+    'Left Elbow': 5,
+    'Left Wrist': 6,
+    'Left Hand': 7,
+    'Right Shoulder': 8,
+    'Right Elbow': 9,
+    'Right Wrist': 10,
+    'Right Hand': 11,
+    'Left Hip': 12,
+    'Left Knee': 13,
+    'Left Ankle': 14,
+    'Left Foot': 15,
+    'Right Hip': 16,
+    'Right Knee': 17,
+    'Right Ankle': 18,
+    'Right Foot': 19,
+    'Spine Shoulder': 20,
+    'Left Hand Tip': 21,
+    'Left Thumb': 22,
+    'Right Hand Tip': 23,
+    'Right Thumb': 24
+}
+

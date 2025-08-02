@@ -41,24 +41,39 @@ def map_to_classifier_dim(backbone_name, option):
         'motionbert': {'option1': []},
         'poseformerv2': {'option1': []},
         'mixste': {'option1': []},
-        'motionagformer': {'option1': []}
+        'motionagformer': {'option1': []},
+        'ctrgcn': {'option1': []}
     }
     return classifier_dims[backbone_name][option]
 
 
-def configure_params_for_best_model(params, backbone_name):
-    best_params = {
-        "lr": 1e-05,
-        "num_epochs": 20,
-        "num_hidden_layers": 2,
-        "layer_sizes": [256, 50, 16, 3],
-        "optimizer": 'RMSprop',
-        "use_weighted_loss": True,
-        "batch_size": 128,
-        "dropout_rate": 0.1,
-        'weight_decay': 0.00057,
-        'momentum': 0.66
-    }
+def configure_params_for_best_model(params, backbone_name):             #TODO:[GCN]这个函数到底有没有用上？
+    if backbone_name == 'ctrgcn':
+        best_params = {
+            "lr": 0.1,
+            "num_epochs": 20,
+            "batch_size": 64,
+            "optimizer": 'SGD',
+            "weight_decay": 0.0001,
+            "momentum": 0.9,  # ⚠️ SGD 要有 momentum 否则后面会 KeyError
+            "dropout_rate": 0.3,  # ✅ 后面会赋值 classifier_dropout
+            "use_weighted_loss": False,  # ✅ 后面用于 criterion 判断
+            "lr_decay_step": [10, 15]
+        }
+
+    else:
+        best_params = {
+            "lr": 1e-05,
+            "num_epochs": 20,
+            "num_hidden_layers": 2,
+            "layer_sizes": [256, 50, 16, 3],
+            "optimizer": 'RMSprop',
+            "use_weighted_loss": True,
+            "batch_size": 128,
+            "dropout_rate": 0.1,
+            'weight_decay': 0.00057,
+            'momentum': 0.66
+        }
     #print_best_model_configuration(best_params, backbone_name) #KeyError: 'best_trial_number'
     update_params_with_best(params, best_params, backbone_name)
     return params
@@ -72,6 +87,7 @@ def print_best_model_configuration(best_params, backbone_name):
     print("========================================================================================")
 
 
+#TODO:这个地方是否要改，需要由后面引入CTR-GCN之后根据其代码再说
 def update_params_with_best(params, best_params, backbone_name):
     params['classifier_dropout'] = best_params['dropout_rate']
     params['classifier_hidden_dims'] = map_to_classifier_dim(backbone_name, 'option1')
@@ -118,7 +134,7 @@ def process_fold(fold, params, backbone_name, train_dataset_fn, val_dataset_fn, 
     params['num_joints'] = train_dataset_fn.dataset._NMAJOR_JOINTS
 
     model_backbone = load_pretrained_backbone(params, backbone_name)
-    model = MotionEncoder(backbone=model_backbone,
+    model = MotionEncoder(backbone=model_backbone,              #TODO:[GCN]需要适配MotionEncoder
                             params=params,
                             num_classes=params['num_classes'],
                             num_joints=params['num_joints'],

@@ -5,13 +5,13 @@ import numpy as np
 import c3d
 import csv
 
-from const_pd import H36M_FULL, PD
+from const_pd import H36M_FULL, PD, NTU_25
 
 from matplotlib import pyplot as plt
 import matplotlib
 from matplotlib.animation import FuncAnimation
 
-# TODO: 考虑一下需不需要改
+# TODO: 考虑一下需不需要改:需要改，因为GCN根本不支持H36M格式
 
 
 def convert_pd_h36m(sequence):
@@ -47,10 +47,76 @@ def convert_pd_h36m(sequence):
     
     return new_keyponts
 
+
+
+def convert_pd_ntu25(sequence):
+    new_keypoints = np.zeros((sequence.shape[0], 25, 3))
+
+    # 躯干和脊柱
+    new_keypoints[..., NTU_25['Base of Spine'], :] = (
+        sequence[..., PD['L.PSIS'], :] + sequence[..., PD['R.PSIS'], :]
+    ) / 2
+
+    new_keypoints[..., NTU_25['Mid Spine'], :] = (
+        sequence[..., PD['STRN'], :] + sequence[..., PD['T10'], :]
+    ) / 2
+
+    new_keypoints[..., NTU_25['Spine Shoulder'], :] = (
+        sequence[..., PD['CLAV'], :] + sequence[..., PD['C7'], :]
+    ) / 2
+
+    # 脖子和头
+    new_keypoints[..., NTU_25['Neck'], :] = new_keypoints[..., NTU_25['Spine Shoulder'], :] + [0.0, 30.0, 0.0]
+    new_keypoints[..., NTU_25['Head'], :] = new_keypoints[..., NTU_25['Spine Shoulder'], :] + [0.0, 140.0, 0.0]
+
+    # 左臂
+    new_keypoints[..., NTU_25['Left Shoulder'], :] = sequence[..., PD['L.SHO'], :]
+    new_keypoints[..., NTU_25['Left Elbow'], :] = (
+        sequence[..., PD['L.EL'], :] + sequence[..., PD['L.EM'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Left Wrist'], :] = (
+        sequence[..., PD['L.WL'], :] + sequence[..., PD['L.WM'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Left Hand'], :] = new_keypoints[..., NTU_25['Left Wrist'], :]
+    new_keypoints[..., NTU_25['Left Hand Tip'], :] = sequence[..., PD['L.WL'], :]
+    new_keypoints[..., NTU_25['Left Thumb'], :] = sequence[..., PD['L.WM'], :]
+
+    # 右臂
+    new_keypoints[..., NTU_25['Right Shoulder'], :] = sequence[..., PD['R.SHO'], :]
+    new_keypoints[..., NTU_25['Right Elbow'], :] = (
+        sequence[..., PD['R.EL'], :] + sequence[..., PD['R.EM'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Right Wrist'], :] = (
+        sequence[..., PD['R.WL'], :] + sequence[..., PD['R.WM'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Right Hand'], :] = new_keypoints[..., NTU_25['Right Wrist'], :]
+    new_keypoints[..., NTU_25['Right Hand Tip'], :] = sequence[..., PD['R.WL'], :]
+    new_keypoints[..., NTU_25['Right Thumb'], :] = sequence[..., PD['R.WM'], :]
+
+    # 左腿
+    new_keypoints[..., NTU_25['Left Hip'], :] = (
+        sequence[..., PD['L.ASIS'], :] + sequence[..., PD['L.PSIS'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Left Knee'], :] = sequence[..., PD['L.KNEE'], :]
+    new_keypoints[..., NTU_25['Left Ankle'], :] = sequence[..., PD['L.ANKLE'], :]
+    new_keypoints[..., NTU_25['Left Foot'], :] = sequence[..., PD['L.HEEL'], :]
+
+    # 右腿
+    new_keypoints[..., NTU_25['Right Hip'], :] = (
+        sequence[..., PD['R.ASIS'], :] + sequence[..., PD['R.PSIS'], :]
+    ) / 2
+    new_keypoints[..., NTU_25['Right Knee'], :] = sequence[..., PD['R.KNEE'], :]
+    new_keypoints[..., NTU_25['Right Ankle'], :] = sequence[..., PD['R.ANKLE'], :]
+    new_keypoints[..., NTU_25['Right Foot'], :] = sequence[..., PD['R.HEEL'], :]
+
+    return new_keypoints
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--input_path', default='/czl_ssd/Public_PD/', type=str, help='Path to the input folder')
+    parser.add_argument('--input_path', default='/czl_hdd/forGCN/Public_PD', type=str, help='Path to the input folder')
+    parser.add_argument('--mode', default='h36m', type=str, help='convert to ntu or h36m')
     args = parser.parse_args()
     return args
 
@@ -127,7 +193,7 @@ def visualize_sequence(seq, name):
     
     plt.close(fig)
 
-def read_pd(sequence_path, start_index, step):
+def read_pd(sequence_path, start_index, step, mode='h36m'):
     """
     Read points data from a .c3d file and create a sequence of selected frames.
 
@@ -149,9 +215,16 @@ def read_pd(sequence_path, start_index, step):
             sequence.append(points[None, :44, :3])
     if len(sequence) == 0:                                      #表示这一整个视频文件，没有任何非corrupted片段，不使用，并且记录起来
         print(sequence_path)
-        with open('./data/pd/Removed_sequences.csv', 'a', newline='') as file:
+
+        if mode == 'ntu':
+            removed_seq_path = './data/pd/GCN_Removed_sequences.csv'
+        else:
+            removed_seq_path = './data/pd/Removed_sequences.csv'
+
+        with open(removed_seq_path, 'a', newline='') as file:
             writer = csv.writer(file)
             writer.writerow([sequence_path])
+
         return sequence
         # sequence2 = []
         # for i, points, analog in reader.read_frames():
@@ -161,7 +234,10 @@ def read_pd(sequence_path, start_index, step):
         # visualize_sequence(sequence2, './data/pd/orig_allremoved')
     sequence = np.concatenate(sequence)
 
-    sequence = convert_pd_h36m(sequence)
+    if mode == 'h36m':
+        sequence = convert_pd_h36m(sequence)
+    elif mode == 'ntu':
+        sequence = convert_pd_ntu25(sequence)
     # visualize_sequence(sequence, './data/pd/orig_all')
     return sequence
 
@@ -181,7 +257,7 @@ def main():
                 sequence_path = os.path.join(root, file)
                 try:
                     for start_index in range(3):                                     #预处理的一种trick，同一段视频可以生成3段样本
-                        sequence = read_pd(sequence_path, start_index, 3)       #步长固定为3，看看后面要不要改？
+                        sequence = read_pd(sequence_path, start_index, 3, args.mode)       #步长固定为3，看看后面要不要改？
                         if len(sequence) == 0:
                             continue
                         output_sequence_path = os.path.join(output_path_c3dfiles, f"{file[:-4]}_{start_index}")

@@ -64,7 +64,7 @@ KeyError: 'metadata'
 
 ## 训练
 
-尝试运行:`python /root/.pycharm_helpers/pydev/pydevd.py --multiprocess --qt-support=auto --client localhost --port 43015 --file /root/MotionEncoders_parkinsonism_benchmark-main/eval_encoder.py --backbone poseformer --medication 1`
+尝试运行:`python /root/.pycharm_helpers/pydev/pydevd.py --multiprocess --qt-support=auto --client localhost --port 43015 --file /root/MotionEncoders_parkinsonism_benchmark-main/eval_encoder.py --backbone poseformerv2 --medication 1`
 
 ------
 k-fold cross-validation 是一种评估模型泛化能力的方法。

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 import wandb
 
-from configs import generate_config_poseformer, generate_config_motionbert, generate_config_poseformerv2, generate_config_mixste, generate_config_motionagformer
+from configs import generate_config_poseformer, generate_config_motionbert, generate_config_poseformerv2, generate_config_mixste, generate_config_motionagformer, generate_config_ctrgcn
 
 from data.dataloaders import *
 from const import path
@@ -79,11 +79,12 @@ if __name__ == '__main__':
         conf_path = './configs/mixste'
     elif backbone_name == 'motionagformer':
         conf_path = './configs/motionagformer'
+    elif backbone_name == 'ctrgcn':
+        conf_path = './configs/ctrgcn' #TODO:[GCN]加入处理逻辑
     else:
         raise NotImplementedError(f"Backbone '{backbone_name}' is not supported")
 
     for fi in sorted(os.listdir(conf_path)):
-
         if backbone_name == 'poseformer':
             params, new_params = generate_config_poseformer.generate_config(param, fi)
         elif backbone_name == 'motionbert':
@@ -94,7 +95,9 @@ if __name__ == '__main__':
             params, new_params = generate_config_mixste.generate_config(param, fi)
         elif backbone_name == 'motionagformer':
             params, new_params = generate_config_motionagformer.generate_config(param, fi)
-        else:
+        elif backbone_name == 'ctrgcn':
+            params, new_params = generate_config_ctrgcn.generate_config(param, fi)
+        else:                                       #TODO:[GCN]写一个generate_config_STGCN
             raise NotImplementedError(f"Backbone '{param['backbone']}' does not exist.")
 
         if param['dataset'] == 'PD':

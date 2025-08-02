@@ -10,6 +10,7 @@ from model.poseformerv2.model_poseformer import PoseTransformerV2
 from model.mixste.model_cross import MixSTE2
 from model.motionagformer.MotionAGFormer import MotionAGFormer
 
+#TODO:[GCN]这一整个函数都需要加入适配
 
 def count_parameters(model):
     model_params = 0

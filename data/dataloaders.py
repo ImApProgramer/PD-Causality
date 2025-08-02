@@ -17,8 +17,9 @@ from data.augmentations import MirrorReflection, RandomRotation, RandomNoise, ax
 from learning.utils import compute_class_weights
 
 _TOTAL_SCORES = 3
-_MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+_MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]          #目前看来之后encoder-decoder中用到了它
 #                1,   2,  3,  4,  5,  6,  7,  9, 10, 11, 13, 14, 15, 17, 18, 19, 21
+_GCN_JOINTS=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
 _ROOT = 0
 _MIN_STD = 1e-4
 
@@ -493,7 +494,7 @@ class MixSTEPreprocessor(DataPreprocessor):
         return clips
 
 
-class CTRGCNPreprocessor(DataPreprocessor):                 #从MotionBert处理函数基础上修改
+class GCNPreprocessor(DataPreprocessor):                 #从MotionBert处理函数基础上修改
     def __init__(self, save_dir, raw_data, params):
         super().__init__(raw_data, params=params)
 
@@ -553,13 +554,18 @@ class CTRGCNPreprocessor(DataPreprocessor):                 #从MotionBert处理
 
 
 class ProcessedDataset(data.Dataset):
-    def __init__(self, data_dir, params=None, mode='train', fold=1, downstream='pd', transform=None):
+    def __init__(self, data_dir, params=None, mode='train', fold=1, downstream='pd', transform=None):    #这里加了个gcn_mode来单独控制，力求保留原有兼容性
         super(ProcessedDataset, self).__init__()
         self._params = params
         self._mode = mode
         self.data_dir = data_dir
         self._task = downstream
         self._NMAJOR_JOINTS = len(_MAJOR_JOINTS)
+        backbone = self.params['backbone']
+        if backbone=='ctrgcn':
+            self.gcn_mode=True
+        else:
+            self.gcn_mode=False
 
         
 
@@ -657,37 +663,47 @@ class ProcessedDataset(data.Dataset):
 
     def __getitem__(self, idx):
         """Get item for the training mode."""
-        x = self.poses[idx]
+        x = self.poses[idx]         #如果是GCN，这里将是(3, T, V, 1)
         label = self.labels[idx]
         video_idx = self.video_name_to_index[self.video_names[idx]] 
 
-        if self._params['data_type'] != "GastNet":
-            joints = self._get_joint_orders()
-            x = x[:, joints, :]
 
-        if self._params['in_data_dim'] == 2:
-            if self._params['simulate_confidence_score']:
-                # TODO: Confidence score should be a function of depth (probably)
-                x[..., 2] = 1  # Consider 3rd dimension as confidence score and set to be 1.
-            else:
-                x = x[..., :2]  # Make sure it's two-dimensional
-        elif self._params['in_data_dim'] == 3:
-            x = x[..., :3] # Make sure it's 3-dimensional
-                
+        if not self.gcn_mode:       #原有的非gcn处理逻辑
+            if self._params['data_type'] != "GastNet":
+                joints = self._get_joint_orders()
+                x = x[:, joints, :]
 
-        if self._params['merge_last_dim']:
-            N = np.shape(x)[0]
-            x = x.reshape(N, -1)   # N x 17 x 3 -> N x 51
+            if self._params['in_data_dim'] == 2:
+                if self._params['simulate_confidence_score']:
+                    # TODO: Confidence score should be a function of depth (probably)
+                    x[..., 2] = 1  # Consider 3rd dimension as confidence score and set to be 1.
+                else:
+                    x = x[..., :2]  # Make sure it's two-dimensional
+            elif self._params['in_data_dim'] == 3:
+                x = x[..., :3]  # Make sure it's 3-dimensional
 
-        x = np.array(x, dtype=np.float32)
+            if self._params['merge_last_dim']:
+                N = np.shape(x)[0]
+                x = x.reshape(N, -1)  # N x 17 x 3 -> N x 51
 
-        if x.shape[0] > self._params['source_seq_len']:
-            # If we're reading a preprocessed pickle file that has more frames
-            # than the expected frame length, we throw away the last few ones.
-            x = x[:self._params['source_seq_len']]
-        elif x.shape[0] < self._params['source_seq_len']:
-            raise ValueError("Number of frames in tensor x is shorter than expected one.")
-        
+            x = np.array(x, dtype=np.float32)
+
+            if x.shape[0] > self._params['source_seq_len']:
+                # If we're reading a preprocessed pickle file that has more frames
+                # than the expected frame length, we throw away the last few ones.
+                x = x[:self._params['source_seq_len']]
+            elif x.shape[0] < self._params['source_seq_len']:
+                raise ValueError("Number of frames in tensor x is shorter than expected one.")
+
+        # 如果是 GCN 模式，直接裁剪后返回 (C, T, V, 1)，不做额外处理
+        else:
+            x = np.array(x, dtype=np.float32)  # 确保是 numpy array
+            if x.shape[1] > self._params['source_seq_len']:  # 检查时间维度 T
+                x = x[:, :self._params['source_seq_len'], :, :]  # 裁剪为 (3, T_crop, V, 1)
+            elif x.shape[1] < self._params['source_seq_len']:
+                raise ValueError(f"Sequence length {x.shape[1]} < required {self._params['source_seq_len']}")
+
+        #处理metadata
         if len(self._params['metadata']) > 0:
             metadata_idx = [METADATA_MAP[element] for element in self._params['metadata']]
             md = self.metadata[idx][0][metadata_idx].astype(np.float32)
@@ -695,13 +711,13 @@ class ProcessedDataset(data.Dataset):
             md = []
 
         sample = {
-            'encoder_inputs': x,
+            'encoder_inputs': x,        # GCN 模式：(3, T, V, 1)；非 GCN 模式：(T, V*C) 或 (T, V, C)
             'label': label,
             'labels_str': self._updrs_str[label],
             'video_idx': video_idx,
             'metadata': md,
         }
-        if self.transform:
+        if self.transform:      #目前决定如果是GCN，就不要变换，所以这个地方不考虑
             sample = self.transform(sample)
         return sample
 
@@ -750,17 +766,20 @@ def dataset_factory(params, backbone, fold):
                                      f"{params['dataset']}_center_{params['data_centered']}/"),
         'mixste': os.path.join(root_dir, params['experiment_name'],
                                      f"{params['dataset']}_center_{params['data_centered']}/"),
+        'ctrgcn': os.path.join(root_dir, params['experiment_name'],
+                               f"{params['dataset']}_center_{params['data_centered']}/")
     }
 
-    backbone_preprocessor_mapper = {                        #加GCN，要改
+    backbone_preprocessor_mapper = {
         'poseformer': POTRPreprocessor,
         'motionbert': MotionBERTPreprocessor,
         'poseformerv2': PoseformerV2Preprocessor,
         'mixste': MixSTEPreprocessor,
-        'motionagformer': MotionAGFormerPreprocessor
+        'motionagformer': MotionAGFormerPreprocessor,
+        'ctrgcn': GCNPreprocessor
     }
 
-    assert_backbone_is_supported(backbone_data_location_mapper, backbone)       #这个后面得改，不然识别不了GCN
+    assert_backbone_is_supported(backbone_data_location_mapper, backbone)
     
     data_dir = backbone_data_location_mapper[backbone]
 
@@ -772,6 +791,7 @@ def dataset_factory(params, backbone, fold):
             '''
             上面这部分就是纯粹的“数据索引+标签”了，我们如何获取它到底是长啥样的？（尤其是骨架数据本身）
             但是注意上面这部分不是起点，起点是preprocess_pd.py，然后才是上面的PDReader()
+            raw_data可以顺利读出
             '''
 
             # if params['augmentation']:
@@ -780,6 +800,11 @@ def dataset_factory(params, backbone, fold):
 
             Preprocessor = backbone_preprocessor_mapper[backbone]
             Preprocessor(data_dir, raw_data, params)
+
+            '''
+            对于GCN的Preprocessor来说，clip_dict中的每项已经是[C,T,V,M]了，和其他东西一起保存在了.pkl里面
+            '''
+
         else:
             raise NotImplementedError(f"dataset '{params['dataset']}' is not supported.")
 

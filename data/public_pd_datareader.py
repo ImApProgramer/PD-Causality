@@ -82,7 +82,7 @@ class PDReader():
         print(self.joints_path)
 
         for file_name in tqdm(os.listdir(self.joints_path)):
-            path_file = os.path.join(self.joints_path, file_name)
+            path_file = os.path.join(self.joints_path, file_name)           #注意这里的.npy依然是[T,V,C]，GCN后面需要进行额外处理
             joints = self.read_sequence(path_file)
             label = self.read_label(file_name)
             metadata = self.read_metadata(file_name)
