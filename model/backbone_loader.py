@@ -60,7 +60,7 @@ def load_pretrained_weights(model, checkpoint):
 
 
 
-def load_pretrained_backbone(params, backbone_name):
+def load_pretrained_backbone(params, backbone_name):            #TODO:思考GCN应该怎么接入预训练模型
     if backbone_name == 'motionbert':
         model_backbone = DSTformer(dim_in=3,
                                    dim_out=3,

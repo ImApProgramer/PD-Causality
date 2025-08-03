@@ -21,6 +21,7 @@ def generate_config(param, f_name):
 
     model_params = {
         'model': 'CTRGCN',
+        'dim_rep': 256,
         'experiment_name': '',
         'classifier_dropout': 0.5,
         #'classifier_hidden_dims': [1024],
@@ -32,13 +33,15 @@ def generate_config(param, f_name):
                 'strategy': 'uniform'
             }
         },
-        'weights': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn.bin"
+        'weights': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn.bin",
+        'model_checkpoint_path': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn_pretrained.bin"
     }
 
     learning_params = {
-        'batch_size': 64,
-        'epochs': 20,
-        'lr_head': 0.1,
+        'batch_size': 64,   #太大显存顶不住，其他模型压力比较小
+        'epochs': 20,          #建议60~80
+        'lr_head': 0.001,
+        'lr_backbone': 0.0001,
         'optimizer': 'SGD',
         'weight_decay': 0.0001,
         'momentum' : 0.9,
