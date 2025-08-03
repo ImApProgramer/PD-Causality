@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
-from ntu_rgb_d import Graph           #调试的时候要注意working directory
+from model.ctrgcn.ntu_rgb_d import Graph
 
 def import_class(name):
     components = name.split('.')
@@ -327,8 +327,10 @@ class Model(nn.Module):
 
         # N*M,C,T,V
         c_new = x.size(1)
-        x = x.view(N, M, c_new, -1)
-        x = x.mean(3).mean(1)
-        x = self.drop_out(x)
 
-        return self.fc(x)
+        x = x.view(N, M, x.size(1), x.size(2), x.size(3)).mean(1)  # => (N, 256, T, V)，这里要考虑和ClassifierHead的对接
+
+        x = x.mean(dim=-1)  # pool over V => (N, 256, T)
+        x = x.mean(dim=-1)  # pool over T => (N, 256)
+
+        return x

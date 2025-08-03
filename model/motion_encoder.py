@@ -206,7 +206,7 @@ class MotionEncoder(nn.Module):
         return out
 
 
-class CTRGCNEncoderWrapper(nn.Module):          #继承CTR-GCN Model来初始化
+class CTRGCNEncoderWrapper(nn.Module):          #继承CTR-GCN Model来初始化,仅用于本文件测试，主模型不这样加载；主模型改动之后它就废了
     def __init__(self, ctrgcn_model: nn.Module):
         super().__init__()
         self.model = ctrgcn_model

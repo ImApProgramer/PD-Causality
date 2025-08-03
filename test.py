@@ -129,12 +129,12 @@ def run_tests_for_each_fold(params, splits, backbone_name, device, rep_out):
 
 def process_fold(fold, params, backbone_name, train_dataset_fn, val_dataset_fn, test_dataset_fn, class_weights, device, total_outs_best, total_gts, total_logits, total_states, total_video_names, total_outs_last, rep_out):
     start_time = datetime.datetime.now()
-    params['input_dim'] = train_dataset_fn.dataset._pose_dim
-    params['pose_dim'] = train_dataset_fn.dataset._pose_dim
+    params['input_dim'] = train_dataset_fn.dataset._pose_dim                #这个参数对于CTR-GCN来说无用，因为它不展平向量
+    params['pose_dim'] = train_dataset_fn.dataset._pose_dim                 #同上，无用
     params['num_joints'] = train_dataset_fn.dataset._NMAJOR_JOINTS
 
     model_backbone = load_pretrained_backbone(params, backbone_name)
-    model = MotionEncoder(backbone=model_backbone,              #TODO:[GCN]需要适配MotionEncoder
+    model = MotionEncoder(backbone=model_backbone,
                             params=params,
                             num_classes=params['num_classes'],
                             num_joints=params['num_joints'],

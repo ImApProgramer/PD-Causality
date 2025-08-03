@@ -9,6 +9,7 @@ from model.poseformer import PoseEncoderDecoder
 from model.poseformerv2.model_poseformer import PoseTransformerV2
 from model.mixste.model_cross import MixSTE2
 from model.motionagformer.MotionAGFormer import MotionAGFormer
+from model.ctrgcn.ctrgcn import Model as CTRGCN
 
 #TODO:[GCN]这一整个函数都需要加入适配
 
@@ -19,7 +20,7 @@ def count_parameters(model):
     return model_params
 
 
-def load_pretrained_weights(model, checkpoint):
+def load_pretrained_weights(model, checkpoint, strict=True):
     """
     Load pretrained weights to model
     Incompatible layers (unmatched in name or size) will be ignored
@@ -47,8 +48,10 @@ def load_pretrained_weights(model, checkpoint):
             matched_layers.append(k)
         else:
             discarded_layers.append(k)
-    model_dict.update(new_state_dict)
-    model.load_state_dict(model_dict, strict=True)
+
+    if(strict):                                 #TODO:先写上，这里默认strict的就是其他模型，否则就是GCN;全部都加载（可是该checkpoint是双人版本训练的，是否会有问题？）
+        model_dict.update(new_state_dict)
+    model.load_state_dict(model_dict, strict)
     print(f'[INFO] (load_pretrained_weights) {len(matched_layers)} layers are loaded')
     print(f'[INFO] (load_pretrained_weights) {len(discarded_layers)} layers are discared')
     if len(matched_layers) == 0:
@@ -131,8 +134,22 @@ def load_pretrained_backbone(params, backbone_name):            #TODO:思考GCN�
                                neighbour_num=params['neighbour_num'],
                                n_frames=params['source_seq_len'])
         checkpoint = torch.load(params['model_checkpoint_path'], map_location=lambda storage, loc: storage)['model']
+    elif backbone_name == "ctrgcn":
+        model_backbone = CTRGCN(num_class=60,  # 这里的值无所谓，不用fc
+                                num_point=params['num_point'],
+                                num_person=params['num_person'],
+                                graph='graph.ntu_rgb_d.Graph',          #其实这个参数根本没用上
+                                graph_args={},
+                                in_channels=params['in_channels'],
+                                drop_out=params['dropout_rate'],
+                                adaptive=True)
+        checkpoint = torch.load(params['model_checkpoint_path'], map_location='cpu')
     else:
         raise Exception("Undefined backbone type.")
 
-    load_pretrained_weights(model_backbone, checkpoint)
+
+    if backbone_name == "ctrgcn":
+        load_pretrained_weights(model_backbone, checkpoint, strict=False)
+    else:
+        load_pretrained_weights(model_backbone, checkpoint)
     return model_backbone

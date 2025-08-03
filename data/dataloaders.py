@@ -17,7 +17,7 @@ from data.augmentations import MirrorReflection, RandomRotation, RandomNoise, ax
 from learning.utils import compute_class_weights
 
 _TOTAL_SCORES = 3
-_MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]          #目前看来之后encoder-decoder中用到了它
+_MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]          #目前看来只有encoder-decoder中用到了它
 #                1,   2,  3,  4,  5,  6,  7,  9, 10, 11, 13, 14, 15, 17, 18, 19, 21
 _GCN_JOINTS=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
 _ROOT = 0
@@ -560,14 +560,18 @@ class ProcessedDataset(data.Dataset):
         self._mode = mode
         self.data_dir = data_dir
         self._task = downstream
-        self._NMAJOR_JOINTS = len(_MAJOR_JOINTS)
-        backbone = self.params['backbone']
-        if backbone=='ctrgcn':
+
+        self.backbone = self._params['backbone']
+        if self.backbone=='ctrgcn':
             self.gcn_mode=True
         else:
             self.gcn_mode=False
 
-        
+        #这里要分开进行处理了
+        if self.gcn_mode==True:
+            self._NMAJOR_JOINTS=len(_GCN_JOINTS)
+        else:
+            self._NMAJOR_JOINTS=len(_MAJOR_JOINTS)
 
         if self._task == 'pd':
             self._updrs_str = ['normal', 'slight', 'moderate']  # , 'severe']
@@ -755,7 +759,7 @@ def dataset_factory(params, backbone, fold):
 
     root_dir = f'{path.PREPROCESSED_DATA_ROOT_PATH}/{backbone}_processing'
 
-    backbone_data_location_mapper = {                       #加GCN，要改
+    backbone_data_location_mapper = {                       #backbone特定的数据处理目录
         'poseformer': os.path.join(root_dir, params['experiment_name'],
                                    f"{params['dataset']}_center_{params['data_centered']}_{params['data_norm']}/"),
         'motionbert': os.path.join(root_dir, params['experiment_name'],
@@ -810,12 +814,15 @@ def dataset_factory(params, backbone, fold):
 
     use_validation = params['use_validation']
 
-    train_transform = transforms.Compose([
-        PreserveKeysTransform(transforms.RandomApply([MirrorReflection(data_dim=params['in_data_dim'])], p=params['mirror_prob'])),
-        PreserveKeysTransform(transforms.RandomApply([RandomRotation(*params['rotation_range'], data_dim=params['in_data_dim'])], p=params['rotation_prob'])),
-        PreserveKeysTransform(transforms.RandomApply([RandomNoise(data_dim=params['in_data_dim'])], p=params['noise_prob'])),
-        PreserveKeysTransform(transforms.RandomApply([axis_mask(data_dim=params['in_data_dim'])], p=params['axis_mask_prob']))
-    ])
+    if not params['backbone']=='ctrgcn':        #TODO:默认不启用CTR-GCN的变换操作，后面需要可以再加
+        train_transform = transforms.Compose([
+            PreserveKeysTransform(transforms.RandomApply([MirrorReflection(data_dim=params['in_data_dim'])], p=params['mirror_prob'])),
+            PreserveKeysTransform(transforms.RandomApply([RandomRotation(*params['rotation_range'], data_dim=params['in_data_dim'])], p=params['rotation_prob'])),
+            PreserveKeysTransform(transforms.RandomApply([RandomNoise(data_dim=params['in_data_dim'])], p=params['noise_prob'])),
+            PreserveKeysTransform(transforms.RandomApply([axis_mask(data_dim=params['in_data_dim'])], p=params['axis_mask_prob']))
+        ])
+    else:
+        train_transform = None
 
     params['metadata'] = ['gender', 'age', 'height', 'weight', 'bmi']       #修改这一行用于稍后的ProcessedDataset不要出错;经过验证后面确实提取出了正确的metadata数据;但是发现在eval_encoder中实际上处理了
 

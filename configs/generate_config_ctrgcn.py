@@ -15,8 +15,9 @@ def generate_config(param, f_name):
         'data_centered': True,              #用来考虑是否需要进行中心化
         'model_prefix': 'GCN_',
         'data_norm': "rescaling",           #不确定用途，只是为了别报错
-        'source_seq_len': 60
-
+        'source_seq_len': 81,
+        'use_validation': True,              #是否启用验证
+        'select_middle': False
     }
 
     model_params = {
@@ -33,8 +34,8 @@ def generate_config(param, f_name):
                 'strategy': 'uniform'
             }
         },
-        'weights': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn.bin",
-        'model_checkpoint_path': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn_pretrained.bin"
+        'weights': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/ctrgcn-weights.bin",
+        'model_checkpoint_path': f"{path.PRETRAINEDD_MODEL_CHECKPOINTS_ROOT_PATH}/ctrgcn/runs-58-57072.pt"      #ntu120 csub joint
     }
 
     learning_params = {
@@ -50,7 +51,9 @@ def generate_config(param, f_name):
         'dropout_rate': 0.5,  # ✅ 添加此字段以匹配 update_params_with_best 中的 dropout_rate
         'use_weighted_loss': False,  # ✅ 明确声明，避免 update时报错
         'lambda_l1': 0.0,  # ✅ 默认值
-        'wandb_name': 'CTRGCN'  # ✅ 必须手动提供才能被 update 函数处理
+        'wandb_name': 'CTRGCN',  # ✅ 必须手动提供才能被 update 函数处理
+        'stopping_tolerance': 10,       #用于早停，不知道是否用到，但是train中显式检查了
+        'criterion': 'WCELoss'          #和poseformer用的一样
     }
 
     params = {**param, **data_params, **model_params, **learning_params}
