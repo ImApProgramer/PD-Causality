@@ -12,7 +12,7 @@ sys.path.insert(0, this_path + "/../")
 from const import path
 from data.dataloaders import *
 from model.backbone_loader import load_pretrained_backbone
-from configs import generate_config_poseformer, generate_config_motionbert, generate_config_poseformerv2, generate_config_mixste, generate_config_motionagformer
+from configs import generate_config_poseformer, generate_config_motionbert, generate_config_poseformerv2, generate_config_mixste, generate_config_motionagformer, generate_config_ctrgcn
 
 _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -67,6 +67,64 @@ H36M_CONNECTIONS_FULL = {
     (H36M_FULL['NECK'], H36M_FULL['HEAD'])
 }
 
+
+NTU_25 = {
+    'Base of Spine': 0,
+    'Mid Spine': 1,
+    'Neck': 2,
+    'Head': 3,
+    'Left Shoulder': 4,
+    'Left Elbow': 5,
+    'Left Wrist': 6,
+    'Left Hand': 7,
+    'Right Shoulder': 8,
+    'Right Elbow': 9,
+    'Right Wrist': 10,
+    'Right Hand': 11,
+    'Left Hip': 12,
+    'Left Knee': 13,
+    'Left Ankle': 14,
+    'Left Foot': 15,
+    'Right Hip': 16,
+    'Right Knee': 17,
+    'Right Ankle': 18,
+    'Right Foot': 19,
+    'Spine Shoulder': 20,
+    'Left Hand Tip': 21,
+    'Left Thumb': 22,
+    'Right Hand Tip': 23,
+    'Right Thumb': 24
+}
+
+NTU_CONNECTIONS_FULL = {
+    (0, 12),  # Base of Spine – Left Hip
+    (0, 16),  # Base of Spine – Right Hip
+    (16, 17), # Right Hip – Right Knee
+    (17, 18), # Right Knee – Right Ankle
+    (18, 19), # Right Ankle – Right Foot
+    (12, 13), # Left Hip – Left Knee
+    (13, 14), # Left Knee – Left Ankle
+    (14, 15), # Left Ankle – Left Foot
+    (0, 1),   # Base of Spine – Mid Spine
+    (1, 20),  # Mid Spine – Spine Shoulder
+    (20, 4),  # Spine Shoulder – Left Shoulder
+    (4, 5),   # Left Shoulder – Left Elbow
+    (5, 6),   # Left Elbow – Left Wrist
+    (6, 7),   # Left Wrist – Left Hand
+    (7, 21),  # Left Hand – Left Hand Tip
+    (6, 22),  # Left Wrist – Left Thumb
+    (20, 8),  # Spine Shoulder – Right Shoulder
+    (8, 9),   # Right Shoulder – Right Elbow
+    (9, 10),  # Right Elbow – Right Wrist
+    (10, 11), # Right Wrist – Right Hand
+    (11, 23), # Right Hand – Right Hand Tip
+    (10, 24), # Right Wrist – Right Thumb
+    (20, 2),  # Spine Shoulder – Neck
+    (2, 3),   # Neck – Head
+}
+
+
+
 def rotate_around_z_axis(points, theta):
     c, s = np.cos(np.radians(theta)), np.sin(np.radians(theta))
     R = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
@@ -108,7 +166,7 @@ def visualize_sequence(seq, name):
         y = seq[frame, :, 1]
         z = seq[frame, :, 2]
 
-        for connection in H36M_CONNECTIONS_FULL:
+        for connection in NTU_CONNECTIONS_FULL:
             start = seq[frame, connection[0], :]
             end = seq[frame, connection[1], :]
             xs = [start[0], end[0]]
@@ -174,6 +232,8 @@ if __name__ == '__main__':
         conf_path = "./configs/mixste",
     elif backbone_name == 'motionagformer':
         conf_path = "./configs/motionagformer"
+    elif backbone_name == 'ctrgcn':
+        conf_path = './configs/ctrgcn'
     else:
         raise NotImplementedError(f"Backbone '{backbone_name}' is not supported")
     
@@ -188,10 +248,12 @@ if __name__ == '__main__':
             params, new_params = generate_config_mixste.generate_config(param, fi)
         elif backbone_name == "motionagformer":
             params, new_params = generate_config_motionagformer.generate_config(param, fi)
+        elif backbone_name == 'ctrgcn':
+            params, new_params = generate_config_ctrgcn.generate_config(param, fi)
         else:
             raise NotImplementedError(f"Backbone '{param['backbone']}' does not exist.")
             
-        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights = dataset_factory(params, backbone_name, 1)
+        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights ,train_dataset= dataset_factory(params, backbone_name, 1)
         
         params['input_dim'] = train_dataset_fn.dataset._pose_dim
         params['pose_dim'] = train_dataset_fn.dataset._pose_dim
@@ -203,19 +265,26 @@ if __name__ == '__main__':
         for param in model_backbone.parameters():
             param.requires_grad = False
         print("[INFO - MotionEncoder] Backbone parameters are frozen")
-        
-        
-        
-        for x, _, video_idx in train_dataset_fn:
-            x = x.to(_DEVICE)
 
-            batch_size = x.shape[0]
+        #for sample in train_dataset_fn:            # x = x.to(_DEVICE)
+            #
+            # batch_size = x.shape[0]
+            #
+            # pose3D = model_backbone(x, return_rep=False)
+            # pose3D = pose3D.cpu().numpy()
+            # for b in range(batch_size):
+            #     visualize_sequence(pose3D[b,:,:,:], f'./data/pd/pd_reconst/video{video_idx[b].cpu().numpy()}')
+            #     ppp=1
 
-            pose3D = model_backbone(x, return_rep=False)
-            pose3D = pose3D.cpu().numpy()
-            for b in range(batch_size):
-                visualize_sequence(pose3D[b,:,:,:], f'./data/pd/pd_reconst/video{video_idx[b].cpu().numpy()}')
-                ppp=1
+        sample = train_dataset[1]
+        x = sample["encoder_inputs"]  # shape: (3, T, V, M)
+        if isinstance(x, np.ndarray):
+            x = torch.from_numpy(x)
+        x_np = x.squeeze(-1).permute(1, 2, 0).numpy()  # => (T, V, C)
+        visualize_sequence(x_np, "sample_check")
+
+
+
 
 
                 

@@ -882,7 +882,7 @@ def dataset_factory(params, backbone, fold):
     
     class_weights = compute_class_weights(train_dataset_fn)
 
-    return train_dataset_fn, test_dataset_fn, eval_dataset_fn, class_weights
+    return train_dataset_fn, test_dataset_fn, eval_dataset_fn, class_weights #,train_dataset,用于可视化
 
 class PreserveKeysTransform:
     def __init__(self, transform):

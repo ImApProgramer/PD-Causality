@@ -80,7 +80,7 @@ if __name__ == '__main__':
     elif backbone_name == 'motionagformer':
         conf_path = './configs/motionagformer'
     elif backbone_name == 'ctrgcn':
-        conf_path = './configs/ctrgcn' #TODO:[GCN]加入处理逻辑
+        conf_path = './configs/ctrgcn'
     else:
         raise NotImplementedError(f"Backbone '{backbone_name}' is not supported")
 
@@ -97,7 +97,7 @@ if __name__ == '__main__':
             params, new_params = generate_config_motionagformer.generate_config(param, fi)
         elif backbone_name == 'ctrgcn':
             params, new_params = generate_config_ctrgcn.generate_config(param, fi)
-        else:                                       #TODO:[GCN]写一个generate_config_STGCN
+        else:
             raise NotImplementedError(f"Backbone '{param['backbone']}' does not exist.")
 
         if param['dataset'] == 'PD':
