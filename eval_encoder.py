@@ -84,7 +84,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f"Backbone '{backbone_name}' is not supported")
 
-    for fi in sorted(os.listdir(conf_path)):
+    for fi in sorted(os.listdir(conf_path)):                #MotionAGFormer在多次跑的时候，会报错，第一轮跑就不会
         if backbone_name == 'poseformer':
             params, new_params = generate_config_poseformer.generate_config(param, fi)
         elif backbone_name == 'motionbert':

@@ -42,7 +42,7 @@ def generate_config(param, f_name):
         'wandb_name': 'poseformerv2',
         'experiment_name': '',
         'batch_size': 256,
-        'criterion': 'CrossEntropyLoss',
+        'criterion': 'CrossEntropyLoss',                #这里为啥用的是CE？而非WCE？有问题
         'optimizer': 'AdamW',
         'lr_backbone': 0.0001,
         'lr_head': 0.001,

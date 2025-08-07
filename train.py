@@ -49,7 +49,7 @@ def final_test(model, test_loader, params):
             predicted_class = torch.argmax(torch.sum(out, dim=0).cpu()).item()
             
             # Append the logits, predicted class, and ground truth label for the video
-            video_logits[video_idx.item()].append(summed_logits)
+            video_logits[video_idx.item()].append(summed_logits)                #模型“信心”值
             video_predclasses[video_idx.item()].append(predicted_class)
             video_labels[video_idx.item()].append(y[0].item())
             video_indices[video_idx.item()].append(video_idx)

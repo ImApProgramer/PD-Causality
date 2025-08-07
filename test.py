@@ -49,21 +49,20 @@ def map_to_classifier_dim(backbone_name, option):
 
 def configure_params_for_best_model(params, backbone_name):             #TODO:[GCN]这个函数到底有没有用上？
     if backbone_name == 'ctrgcn':
-        best_params = {
-            "lr": 0.1,
+        best_params = {     # ⚠️这些参数是否合理呢？
+            "lr": 0.001,    #0807调参：似乎有点太大了，从原来的0.1调整到0.001
             "num_epochs": 20,
             "batch_size": 64,
             "optimizer": 'SGD',
             "weight_decay": 0.0001,
-            "momentum": 0.9,  # ⚠️ SGD 要有 momentum 否则后面会 KeyError
-            "dropout_rate": 0.3,  # ✅ 后面会赋值 classifier_dropout
-            "use_weighted_loss": False,  # ✅ 后面用于 criterion 判断
-            "lr_decay_step": [10, 15]
+            "momentum": 0.9,
+            "dropout_rate": 0.1,  # 0807调参：保持和下面一致
+            "use_weighted_loss": True  # 0807调参修改为True
         }
 
     else:
         best_params = {
-            "lr": 1e-05,
+            "lr": 1e-05,            #这个其实是分类头的学习率
             "num_epochs": 20,
             "num_hidden_layers": 2,
             "layer_sizes": [256, 50, 16, 3],

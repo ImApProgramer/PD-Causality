@@ -166,7 +166,14 @@ def visualize_sequence(seq, name):
         y = seq[frame, :, 1]
         z = seq[frame, :, 2]
 
-        for connection in NTU_CONNECTIONS_FULL:
+        if seq.shape[1] == 17:
+            connections = H36M_CONNECTIONS_FULL
+        elif seq.shape[1] == 25:
+            connections = NTU_CONNECTIONS_FULL
+        else:
+            raise ValueError(f"Unsupported joint count: {seq.shape[1]}")
+
+        for connection in connections:
             start = seq[frame, connection[0], :]
             end = seq[frame, connection[1], :]
             xs = [start[0], end[0]]
@@ -276,13 +283,34 @@ if __name__ == '__main__':
             #     visualize_sequence(pose3D[b,:,:,:], f'./data/pd/pd_reconst/video{video_idx[b].cpu().numpy()}')
             #     ppp=1
 
-        sample = train_dataset[1]
-        x = sample["encoder_inputs"]  # shape: (3, T, V, M)
-        if isinstance(x, np.ndarray):
-            x = torch.from_numpy(x)
-        x_np = x.squeeze(-1).permute(1, 2, 0).numpy()  # => (T, V, C)
-        visualize_sequence(x_np, "sample_check")
 
+
+        if backbone_name == 'ctrgcn':
+            sample = train_dataset[1]
+            x = sample["encoder_inputs"]  # shape: (3, T, V, M)
+            if isinstance(x, np.ndarray):
+                x = torch.from_numpy(x)
+            x_np = x.squeeze(-1).permute(1, 2, 0).numpy()  # => (T, V, C)
+            visualize_sequence(x_np, "sample_check")
+        else:
+            sample = train_dataset[1]
+            x = sample['encoder_inputs']  # shape: (T, V, C)
+            video_idx = sample['video_idx']
+
+            # ensure x is (T, V, C)
+            if x.ndim == 2:  # (T, VC)
+                T, VC = x.shape
+                V = params['num_joints']
+                C = VC // V
+                x = x.reshape(T, V, C)
+
+            x_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0).to(_DEVICE)  # (1, T, V, C)
+            print("input x_tensor shape:", x_tensor.shape)  # 应该是 (1, T, V, C)
+
+            with torch.no_grad():
+                pose3D = model_backbone(x_tensor, return_rep=False).cpu().numpy()  # (1, T, V, 3)
+            print("pose3D shape:", pose3D.shape)
+            visualize_sequence(pose3D[0], f"./data/pd/pd_reconst/video{video_idx}")
 
 
 

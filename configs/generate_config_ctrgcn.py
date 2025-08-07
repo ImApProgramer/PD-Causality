@@ -49,7 +49,7 @@ def generate_config(param, f_name):
         'nesterov': True,
         'lr_decay_step': [10, 15],
         'dropout_rate': 0.5,  # ✅ 添加此字段以匹配 update_params_with_best 中的 dropout_rate
-        'use_weighted_loss': False,  # ✅ 明确声明，避免 update时报错
+        'use_weighted_loss': True,  # 0807调参
         'lambda_l1': 0.0,  # ✅ 默认值
         'wandb_name': 'CTRGCN',  # ✅ 必须手动提供才能被 update 函数处理
         'stopping_tolerance': 10,       #用于早停，不知道是否用到，但是train中显式检查了

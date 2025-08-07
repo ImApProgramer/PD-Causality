@@ -60,7 +60,7 @@ def generate_config(param, f_name):
     learning_params = {
         'wandb_name': 'MotionAGFormer',
         'experiment_name': '',
-        'batch_size': 256,
+        'batch_size': 32,
         'criterion': 'CrossEntropyLoss',
         'optimizer': 'AdamW',
         'lr_backbone': 0.0001,
@@ -85,7 +85,7 @@ def generate_config(param, f_name):
                 "Error: One of the config parameters in " + "./Configs/" + f_name + " does not match code!")
         params[p] = new_param[p]
 
-    params['labels_path'] = params['data_path']  # Data Path is the path to csv files by default
+    params['labels_path'] = path.PD_PATH_LABELS  # Data Path is the path to csv files by default
 
     params['model_prefix'] = params['model_prefix'] + f_name.split('.json')[0]
     return params, new_param

@@ -14,5 +14,5 @@
     "source_seq_len": 81,
     "dim_feat": 64,
     "n_layers": 26,
-    "model_checkpoint_path": "/cluster/projects/taati/vida/motion_evaluator_data/Pretrained_checkpoints/motionagformer/motionagformer-s-h36m.pth.tr"
+    "model_checkpoint_path": "/czl_ssd/motion_evaluator/Pretrained_checkpoints/motionagformer/motionagformer-xs-h36m.pth.tr"
 }

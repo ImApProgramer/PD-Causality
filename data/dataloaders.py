@@ -361,7 +361,7 @@ class MotionAGFormerPreprocessor(DataPreprocessor):
             self.place_depth_of_first_frame_to_zero()
 
         clip_dict = self.partition_videos(clip_length=self.params['source_seq_len'])
-        self.generate_leave_one_out_folds(clip_dict, save_dir)
+        self.generate_leave_one_out_folds(clip_dict, save_dir, raw_data.labels_dict)
 
     def place_depth_of_first_frame_to_zero(self):
         for key in self.pose_dict.keys():
@@ -824,7 +824,9 @@ def dataset_factory(params, backbone, fold):
     else:
         train_transform = None
 
-    params['metadata'] = ['gender', 'age', 'height', 'weight', 'bmi']       #修改这一行用于稍后的ProcessedDataset不要出错;经过验证后面确实提取出了正确的metadata数据;但是发现在eval_encoder中实际上处理了
+    params['metadata'] = [
+        #'gender', 'age', 'height', 'weight', 'bmi'
+    ]       #修改这一行用于稍后的ProcessedDataset不要出错;经过验证后面确实提取出了正确的metadata数据;但是发现在eval_encoder中实际上处理了
 
     train_dataset = ProcessedDataset(data_dir, fold=fold, params=params,
                                             mode='train' if use_validation else 'train-eval', transform=train_transform)        #这里传入的时候params根本没有metadata这一项，导致报错
@@ -880,9 +882,9 @@ def dataset_factory(params, backbone, fold):
         pin_memory=True,
     )
     
-    class_weights = compute_class_weights(train_dataset_fn)
+    class_weights = compute_class_weights(train_dataset_fn)             #MotionAGFormer多次运行时，出错
 
-    return train_dataset_fn, test_dataset_fn, eval_dataset_fn, class_weights #,train_dataset,用于可视化
+    return train_dataset_fn, test_dataset_fn, eval_dataset_fn, class_weights #,train_dataset #用于可视化
 
 class PreserveKeysTransform:
     def __init__(self, transform):
