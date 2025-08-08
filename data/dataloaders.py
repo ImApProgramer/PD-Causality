@@ -721,7 +721,7 @@ class ProcessedDataset(data.Dataset):
             'video_idx': video_idx,
             'metadata': md,
         }
-        if self.transform:      #目前决定如果是GCN，就不要变换，所以这个地方不考虑
+        if self.transform:      #TODO:如果要做可视化，必须把这两行注释掉
             sample = self.transform(sample)
         return sample
 
@@ -787,7 +787,7 @@ def dataset_factory(params, backbone, fold):
     
     data_dir = backbone_data_location_mapper[backbone]
 
-    if not os.path.exists(data_dir):
+    if not os.path.exists(data_dir):        #TODO:这个处理逻辑大有问题，千万要小心:如果你要重新跑GCN或者换模型，建议最好删掉这个存在的文件夹重新处理
         if params['dataset'] == 'PD':
             raw_data = PDReader(params['data_path'], params['labels_path']) 
 
@@ -802,7 +802,7 @@ def dataset_factory(params, backbone, fold):
             #     augmenter = PoseSequenceAugmentation(params)
             #     raw_data = augmenter.augment_data(raw_data, params['augmentation'])
 
-            Preprocessor = backbone_preprocessor_mapper[backbone]
+            Preprocessor = backbone_preprocessor_mapper[backbone]           #👈这就是上面说的容易出问题的原因，它放在这里面
             Preprocessor(data_dir, raw_data, params)
 
             '''
@@ -822,7 +822,17 @@ def dataset_factory(params, backbone, fold):
             PreserveKeysTransform(transforms.RandomApply([axis_mask(data_dim=params['in_data_dim'])], p=params['axis_mask_prob']))
         ])
     else:
-        train_transform = None
+        train_transform = transforms.Compose([
+            PreserveKeysTransform(
+                transforms.RandomApply([MirrorReflection(format='ntu25',data_dim=3)], p=params['mirror_prob'])),     #data_dim=3根本没用到，随便传的
+            PreserveKeysTransform(
+                transforms.RandomApply([RandomRotation(*params['rotation_range'], data_dim=3)],
+                                       p=params['rotation_prob'])),
+            PreserveKeysTransform(
+                transforms.RandomApply([RandomNoise(data_dim=3)], p=params['noise_prob'])),
+            PreserveKeysTransform(
+                transforms.RandomApply([axis_mask(data_dim=3)], p=params['axis_mask_prob']))
+        ])
 
     params['metadata'] = [
         #'gender', 'age', 'height', 'weight', 'bmi'

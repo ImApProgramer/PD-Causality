@@ -11,7 +11,6 @@ from matplotlib import pyplot as plt
 import matplotlib
 from matplotlib.animation import FuncAnimation
 
-# TODO: 考虑一下需不需要改:需要改，因为GCN根本不支持H36M格式
 
 
 def convert_pd_h36m(sequence):
@@ -115,7 +114,7 @@ def convert_pd_ntu25(sequence):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--input_path', default='/czl_hdd/forGCN/Public_PD', type=str, help='Path to the input folder')
+    parser.add_argument('--input_path', default='/czl_hdd/Public_PD', type=str, help='Path to the input folder')
     parser.add_argument('--mode', default='h36m', type=str, help='convert to ntu or h36m')
     args = parser.parse_args()
     return args

@@ -50,12 +50,12 @@ def map_to_classifier_dim(backbone_name, option):
 def configure_params_for_best_model(params, backbone_name):             #TODO:[GCN]这个函数到底有没有用上？
     if backbone_name == 'ctrgcn':
         best_params = {     # ⚠️这些参数是否合理呢？
-            "lr": 0.001,    #0807调参：似乎有点太大了，从原来的0.1调整到0.001
+            "lr": 1e-05,    #0807调参：似乎有点太大了，从原来的0.1调整到0.001
             "num_epochs": 20,
-            "batch_size": 64,
-            "optimizer": 'SGD',
-            "weight_decay": 0.0001,
-            "momentum": 0.9,
+            "batch_size": 128,
+            "optimizer": 'AdamW',
+            "weight_decay": 0.00057,
+            "momentum": 0.66,
             "dropout_rate": 0.1,  # 0807调参：保持和下面一致
             "use_weighted_loss": True  # 0807调参修改为True
         }
@@ -66,7 +66,7 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
             "num_epochs": 20,
             "num_hidden_layers": 2,
             "layer_sizes": [256, 50, 16, 3],
-            "optimizer": 'RMSprop',
+            "optimizer": 'AdamW',           #从原本的RMSprop修改而来，涨了0.04
             "use_weighted_loss": True,
             "batch_size": 128,
             "dropout_rate": 0.1,

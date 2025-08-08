@@ -17,7 +17,12 @@ def generate_config(param, f_name):
         'data_norm': "rescaling",           #不确定用途，只是为了别报错
         'source_seq_len': 81,
         'use_validation': True,              #是否启用验证
-        'select_middle': False
+        'select_middle': False,
+        'mirror_prob': 0.5,
+        'rotation_range': [-10, 10],
+        'rotation_prob': 0.5,
+        'noise_prob': 0.5,
+        'axis_mask_prob': 0.5
     }
 
     model_params = {
