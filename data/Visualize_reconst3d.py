@@ -260,7 +260,7 @@ if __name__ == '__main__':
         else:
             raise NotImplementedError(f"Backbone '{param['backbone']}' does not exist.")
             
-        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights ,train_dataset= dataset_factory(params, backbone_name, 1)
+        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights= dataset_factory(params, backbone_name, 1)
         
         params['input_dim'] = train_dataset_fn.dataset._pose_dim
         params['pose_dim'] = train_dataset_fn.dataset._pose_dim
@@ -284,20 +284,50 @@ if __name__ == '__main__':
             #     ppp=1
 
         if backbone_name == 'ctrgcn':
-            sample = train_dataset[30]
-            x = sample["encoder_inputs"]  # shape: (3, T, V, M) if gcn
-            print("label,",sample["label"],"video_idx,",sample["video_idx"])
-            if isinstance(x, np.ndarray):
-                x = torch.from_numpy(x)
-            x_np = x.squeeze(-1).permute(1, 2, 0).numpy()  # => (T, V, C)
-            visualize_sequence(x_np, "sample_check")
-        elif backbone_name == 'motionbert':
-            sample = train_dataset[30]
-            x = sample["encoder_inputs"]        #(T,V,C)
-            print("label,", sample["label"], "video_idx,", sample["video_idx"])
-            if isinstance(x, np.ndarray):
-                x = torch.from_numpy(x)
-            visualize_sequence(x_np, "motionbert_sample_check")
+            # sample = train_dataset[29]          #这里取29并且没有关闭数据增强的时候，似乎可视化结果怪怪的
+            # x = sample["encoder_inputs"]  # shape: (3, T, V, M) if gcn
+            # print("label,",sample["label"],"video_idx,",sample["video_idx"])
+            # if isinstance(x, np.ndarray):
+            #     x = torch.from_numpy(x)
+            # x_np = x.squeeze(-1).permute(1, 2, 0).numpy()  # => (T, V, C)
+            # visualize_sequence(x_np, "ctrgcn_sample_check")
+
+            for x,label,labels_str,video_idx in train_dataset_fn:
+                x = x.to(_DEVICE)           #[B,C,T,V,M]=[B,3,T,25,1]
+                batch_size = x.shape[0]
+
+                for b in range(batch_size):
+                    x_to=x[b]       #[C,T,V,M]
+                    if isinstance(x_to, np.ndarray):
+                        x_to = torch.from_numpy(x_to)
+                    x_np = x_to.squeeze(-1).permute(1, 2, 0).cpu().numpy()  # => (T, V, C)
+                    visualize_sequence(
+                        x_np,
+                        f'./data/pd/pd_reconst/ctrgcn/video{b}_label{label[b]}'
+                    )
+                break  # 如果只想看一批，避免跑完整个 dataset
+
+
+
+        elif backbone_name == 'motionbert':     #注意：这里并不是像这个文件一开始那样来看看模型重建的3D姿态，而是看看他的dataloader输出的3d姿态[T,V,C]是否正确，仅此而已
+            #visualize_sequence(x_np, "motionbert_sample_check")     #最终输出一个压扁了的2d图像，很显然：我们在这里面喂给motionBert的是二维图像
+
+            for x,label,labels_str,video_idx in train_dataset_fn:
+                x = x.to(_DEVICE)
+
+                batch_size = x.shape[0]
+
+                # 用 backbone 做 2D → 3D lift
+                pose3D = model_backbone(x, return_rep=False)  # shape: (B, T, V, 3)
+                pose3D = pose3D.cpu().numpy()
+
+                # 可视化每个样本
+                for b in range(batch_size):
+                    visualize_sequence(
+                        pose3D[b, :, :, :],
+                        f'./data/pd/pd_reconst/motionbert/video{b}_label{label[b]}'
+                    )
+                break  # 如果只想看一批，避免跑完整个 dataset
 
 
 

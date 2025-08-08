@@ -114,7 +114,7 @@ def convert_pd_ntu25(sequence):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--input_path', default='/czl_hdd/Public_PD', type=str, help='Path to the input folder')
+    parser.add_argument('--input_path', default='/czl_ssd/Public_PD', type=str, help='Path to the input folder')
     parser.add_argument('--mode', default='h36m', type=str, help='convert to ntu or h36m')
     args = parser.parse_args()
     return args
@@ -244,7 +244,13 @@ def main():
     args = parse_args()
 
     input_path_c3dfiles = os.path.join(args.input_path, 'C3Dfiles')
-    output_path_c3dfiles = os.path.join(args.input_path, 'C3Dfiles_processed_new')
+
+    mode=args.mode
+    if mode == 'h36m':
+        output_path_c3dfiles = os.path.join(args.input_path, 'C3Dfiles_processed_new')
+    elif mode == 'ntu':
+        output_path_c3dfiles = os.path.join(args.input_path, 'C3Dfiles_processed_GCN')
+
 
     if not os.path.exists(input_path_c3dfiles):
         raise FileNotFoundError(f"Input folder '{input_path_c3dfiles}' not found.")

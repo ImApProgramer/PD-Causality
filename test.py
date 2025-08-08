@@ -60,7 +60,7 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
             "use_weighted_loss": True  # 0807调参修改为True
         }
 
-    else:
+    elif backbone_name== 'poseformerv2':
         best_params = {
             "lr": 1e-05,            #这个其实是分类头的学习率
             "num_epochs": 20,
@@ -69,6 +69,32 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
             "optimizer": 'AdamW',           #从原本的RMSprop修改而来，涨了0.04
             "use_weighted_loss": True,
             "batch_size": 128,
+            "dropout_rate": 0.1,
+            'weight_decay': 0.00057,
+            'momentum': 0.66
+        }
+    elif backbone_name == 'motionbert':     #跑不起来，炸显存严重
+        best_params = {
+            "lr": 1e-05,
+            "num_epochs": 20,
+            "num_hidden_layers": 2,
+            "layer_sizes": [256, 50, 16, 3],
+            "optimizer": 'RMSprop',
+            "use_weighted_loss": True,
+            "batch_size": 4,
+            "dropout_rate": 0.1,
+            'weight_decay': 0.00057,
+            'momentum': 0.66
+        }
+    elif backbone_name == 'motionagformer':
+        best_params = {
+            "lr": 1e-05,
+            "num_epochs": 20,
+            "num_hidden_layers": 2,
+            "layer_sizes": [256, 50, 16, 3],
+            "optimizer": 'RMSprop',
+            "use_weighted_loss": True,
+            "batch_size": 4,
             "dropout_rate": 0.1,
             'weight_decay': 0.00057,
             'momentum': 0.66

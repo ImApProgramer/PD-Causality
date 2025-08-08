@@ -107,7 +107,7 @@ if __name__ == '__main__':
             raise NotImplementedError(f"dataset '{param['dataset']}' is not supported.")
 
         all_folds = range(1, num_folds + 1)
-        set_random_seed(param['seed'])
+        set_random_seed(param['seed'])      #TODO:检查一下这个seed到底有没有作用？
 
         test_and_report(params, new_params, all_folds, backbone_name, _DEVICE)
             

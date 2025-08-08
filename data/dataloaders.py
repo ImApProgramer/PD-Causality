@@ -721,7 +721,7 @@ class ProcessedDataset(data.Dataset):
             'video_idx': video_idx,
             'metadata': md,
         }
-        if self.transform:      #TODO:如果要做可视化，必须把这两行注释掉
+        if self.transform:      #TODO:如果要做可视化，必须把这两行注释掉，否则结果不可名状，也容易导致错误
             sample = self.transform(sample)
         return sample
 
@@ -814,7 +814,7 @@ def dataset_factory(params, backbone, fold):
 
     use_validation = params['use_validation']
 
-    if not params['backbone']=='ctrgcn':        #TODO:默认不启用CTR-GCN的变换操作，后面需要可以再加
+    if not params['backbone']=='ctrgcn':
         train_transform = transforms.Compose([
             PreserveKeysTransform(transforms.RandomApply([MirrorReflection(data_dim=params['in_data_dim'])], p=params['mirror_prob'])),
             PreserveKeysTransform(transforms.RandomApply([RandomRotation(*params['rotation_range'], data_dim=params['in_data_dim'])], p=params['rotation_prob'])),
