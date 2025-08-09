@@ -787,7 +787,7 @@ def dataset_factory(params, backbone, fold):
     
     data_dir = backbone_data_location_mapper[backbone]
 
-    if not os.path.exists(data_dir):        #TODO:这个处理逻辑大有问题，千万要小心:如果你要重新跑GCN或者换模型，建议最好删掉这个存在的文件夹重新处理
+    if not os.path.exists(data_dir):        #TODO:请记住,每次要跑一个模型的时候，如果之前没跑过，先去跑preprocess_pd;如果之前跑过了，希望重新生成LOSOCV来排除变量的时候，请删掉motione_evaluator/data/下的相应模型处理文件夹
         if params['dataset'] == 'PD':
             raw_data = PDReader(params['data_path'], params['labels_path']) 
 

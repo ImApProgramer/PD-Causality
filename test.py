@@ -94,7 +94,7 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
             "layer_sizes": [256, 50, 16, 3],
             "optimizer": 'RMSprop',
             "use_weighted_loss": True,
-            "batch_size": 4,
+            "batch_size": 32,
             "dropout_rate": 0.1,
             'weight_decay': 0.00057,
             'momentum': 0.66
@@ -112,7 +112,7 @@ def print_best_model_configuration(best_params, backbone_name):
     print("========================================================================================")
 
 
-#TODO:这个地方是否要改，需要由后面引入CTR-GCN之后根据其代码再说
+
 def update_params_with_best(params, best_params, backbone_name):
     params['classifier_dropout'] = best_params['dropout_rate']
     params['classifier_hidden_dims'] = map_to_classifier_dim(backbone_name, 'option1')

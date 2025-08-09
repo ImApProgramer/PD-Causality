@@ -59,7 +59,7 @@ def generate_config(param, f_name):
         'wandb_name': 'CTRGCN',  # ✅ 必须手动提供才能被 update 函数处理
         'stopping_tolerance': 10,       #用于早停，不知道是否用到，但是train中显式检查了
         'criterion': 'WCELoss',          #和poseformer用的一样
-        'scheduler': "StepLR",
+        #'scheduler': "StepLR",
         'lr_step_size': 1,
         'lr_decay': 0.99
     }
