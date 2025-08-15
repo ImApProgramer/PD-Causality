@@ -86,18 +86,37 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
             'weight_decay': 0.00057,
             'momentum': 0.66
         }
+    # elif backbone_name == 'motionagformer':
+    #     best_params = {
+    #         "lr": 1e-05,
+    #         "num_epochs": 20,
+    #         "num_hidden_layers": 2,
+    #         "layer_sizes": [256, 50, 16, 3],
+    #         "optimizer": 'RMSprop',
+    #         "use_weighted_loss": True,
+    #         "batch_size": 32,
+    #         "dropout_rate": 0.1,
+    #         'weight_decay': 0.00057,
+    #         'momentum': 0.66
+    #     }
+
     elif backbone_name == 'motionagformer':
         best_params = {
-            "lr": 1e-05,
-            "num_epochs": 20,
+            "lr": 5e-05,  # 稍微加快收敛速度，但不过冲
+            "num_epochs": 30,  # 多给点epoch，让增强样本有机会训练到
             "num_hidden_layers": 2,
-            "layer_sizes": [256, 50, 16, 3],
-            "optimizer": 'RMSprop',
+            "layer_sizes": [128, 32, 8, 3],  # 降低模型容量，减少过拟合
+            "optimizer": 'AdamW',  # 对小样本泛化稳定
             "use_weighted_loss": True,
-            "batch_size": 32,
-            "dropout_rate": 0.1,
-            'weight_decay': 0.00057,
-            'momentum': 0.66
+            "batch_size": 16,  # 较小批量，增加梯度更新频率
+            "dropout_rate": 0.4,  # 明显提高Dropout防过拟合
+            "weight_decay": 0.001,  # L2正则更强
+            "momentum": 0.9,  # 这里即使AdamW不用也可以留着给兼容
+            "rotation_prob": 0.5,  # 增强概率提高
+            "mirror_prob": 0.5,
+            "noise_prob": 0.4,
+            "axis_mask_prob": 0.3,
+            "rotation_range": (-15, 15)  # 限制旋转幅度，防止过大扰动
         }
     #print_best_model_configuration(best_params, backbone_name) #KeyError: 'best_trial_number'
     update_params_with_best(params, best_params, backbone_name)
@@ -140,6 +159,8 @@ def run_fold_tests(params, all_folds, backbone_name, device, rep_out):
 def setup_datasets(params, backbone_name, all_folds):
     splits = []
     for fold in all_folds:
+        if dataset_factory(params, backbone_name, fold) is None:
+            continue
         train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights = dataset_factory(params, backbone_name, fold)
         splits.append((train_dataset_fn, val_dataset_fn, test_dataset_fn, class_weights))
     return splits
@@ -218,10 +239,15 @@ def process_fold(fold, params, backbone_name, train_dataset_fn, val_dataset_fn, 
     print(f"Fold {fold} run time:", duration)
 
 
-def calculate_metrics(outputs, targets, states, phase, report_prefix, output_dir):
+def calculate_metrics(outputs, targets, states, phase, report_prefix, output_dir):      #分开ON和OFF进行统计
     # Filter outputs and targets based on the phase ('ON' or 'OFF')
     filtered_gts = [gt for gt, state in zip(targets, states) if state == phase]
     filtered_outs = [out for out, state in zip(outputs, states) if state == phase]
+
+    if not filtered_gts:  # 没有该 phase 的样本
+        print(f"[WARNING] Phase '{phase}' not found in dataset. Skipping...")
+        print(f"[DEBUG] All unique states in current fold: {set(states)}")
+        return
 
     report = classification_report(filtered_gts, filtered_outs)
     confusion = confusion_matrix(filtered_gts, filtered_outs)
@@ -238,7 +264,7 @@ def process_reports(outputs_best, outputs_last, targets, states, output_dir):
     for prefix, outputs in [('best', outputs_best), ('last', outputs_last)]:
         print(f"=========={prefix.upper()} REPORTS============")
         # Full dataset metrics
-        report_final = classification_report(targets, outputs)
+        report_final = classification_report(targets, outputs)          #总的结果（不区分ON/OFF）
         confusion_final = confusion_matrix(targets, outputs)
         log_results(report_final, confusion_final, f'{prefix}_report_allfolds.txt', f'{prefix}_confusion_matrix_allfolds.png', output_dir)
 

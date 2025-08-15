@@ -13,9 +13,10 @@ class PDReader():
     OFF_LABEL_COLUMN = 'OFF - UPDRS-III - walking'
     DELIMITER = ';'
 
-    def __init__(self, joints_path, labels_path):
+    def __init__(self, joints_path, labels_path,med_status=None):        # med_status决定是否要只使用某个状态下的数据样本来处理，如果打开，那么--medication参数不应该加入
         self.joints_path = joints_path
         self.labels_path = labels_path
+        self.med_status=med_status
         self.pose_dict, self.labels_dict, self.video_names, self.participant_ID, self.metadata_dict = self.read_keypoints_and_labels()
 
     def read_sequence(self, path_file):
@@ -82,6 +83,15 @@ class PDReader():
         print(self.joints_path)
 
         for file_name in tqdm(os.listdir(self.joints_path)):
+
+            # 如果有med_status过滤要求
+            if self.med_status is not None:
+                lower_name = file_name.lower()
+                if self.med_status == "ON" and "off" in lower_name:
+                    continue
+                elif self.med_status == "OFF" and "on" in lower_name:
+                    continue
+
             path_file = os.path.join(self.joints_path, file_name)           #注意这里的.npy依然是[T,V,C]，GCN后面需要进行额外处理
             joints = self.read_sequence(path_file)
             label = self.read_label(file_name)

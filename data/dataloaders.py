@@ -176,6 +176,101 @@ class DataPreprocessor(ABC):
         if not val_folds_exists:
             pickle.dump(val_subs_folds, open(val_folds_path, "wb"))
 
+    def generate_standard_cv_folds(self, clip_dict, save_dir, labels_dict):
+        """
+        生成标准的 70/15/15 数据划分，支持分层采样
+        """
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+
+        dataset_name = self.params['dataset']
+        video_names_list = list(clip_dict.keys())
+
+        # 如果需要分层采样（按类别分层）
+        if self.params.get('stratified_split', True):
+            train_list, val_list, test_list = self._stratified_split(video_names_list, labels_dict)
+        else:
+            # 简单随机划分
+            train_list, val_list, test_list = self._random_split(video_names_list)
+
+        print(f"Standard CV Split - Train: {len(train_list)}, Val: {len(val_list)}, Test: {len(test_list)}")
+
+        # 打印每个split的类别分布
+        self._print_class_distribution(train_list, val_list, test_list, labels_dict)
+
+        train, validation, test = self.generate_pose_label_videoname(clip_dict, train_list, val_list, test_list)
+
+        # 保存文件（不带fold后缀）
+        pickle.dump(train_list, open(os.path.join(save_dir, f"{dataset_name}_train_list.pkl"), "wb"))
+        pickle.dump(test_list, open(os.path.join(save_dir, f"{dataset_name}_test_list.pkl"), "wb"))
+        pickle.dump(val_list, open(os.path.join(save_dir, f"{dataset_name}_validation_list.pkl"), "wb"))
+        pickle.dump(train, open(os.path.join(save_dir, f"{dataset_name}_train.pkl"), "wb"))
+        pickle.dump(test, open(os.path.join(save_dir, f"{dataset_name}_test.pkl"), "wb"))
+        pickle.dump(validation, open(os.path.join(save_dir, f"{dataset_name}_validation.pkl"), "wb"))
+        pickle.dump(self.labels_dict, open(os.path.join(save_dir, f"{dataset_name}_labels.pkl"), "wb"))
+
+    def _stratified_split(self, video_names_list, labels_dict):
+        """分层采样划分数据"""
+        from collections import defaultdict
+
+        # 按类别分组
+        class_videos = defaultdict(list)
+        for video_name in video_names_list:
+            label = labels_dict[video_name]
+            class_videos[label].append(video_name)
+
+        train_list, val_list, test_list = [], [], []
+
+        # 固定随机种子
+        rng = np.random.default_rng(seed=self.params.get('seed', 42))
+
+        # 对每个类别分别划分
+        for label, videos in class_videos.items():
+            videos = videos.copy()
+            rng.shuffle(videos)
+
+            n_videos = len(videos)
+            n_train = int(0.7 * n_videos)
+            n_val = int(0.15 * n_videos)
+            # n_test = n_videos - n_train - n_val  # 剩余的都是test
+
+            train_list.extend(videos[:n_train])
+            val_list.extend(videos[n_train:n_train + n_val])
+            test_list.extend(videos[n_train + n_val:])
+
+        return train_list, val_list, test_list
+
+    def _random_split(self, video_names_list):
+        """简单随机划分"""
+        video_names_list = video_names_list.copy()
+        rng = np.random.default_rng(seed=self.params.get('seed', 42))
+        rng.shuffle(video_names_list)
+
+        train_size = int(0.7 * len(video_names_list))
+        val_size = int(0.15 * len(video_names_list))
+
+        train_list = video_names_list[:train_size]
+        val_list = video_names_list[train_size:train_size + val_size]
+        test_list = video_names_list[train_size + val_size:]
+
+        return train_list, val_list, test_list
+
+    def _print_class_distribution(self, train_list, val_list, test_list, labels_dict):
+        """打印每个split的类别分布"""
+
+        def get_distribution(video_list):
+            from collections import Counter
+            labels = [labels_dict[video] for video in video_list]
+            return Counter(labels)
+
+        train_dist = get_distribution(train_list)
+        val_dist = get_distribution(val_list)
+        test_dist = get_distribution(test_list)
+
+        print("Class distribution:")
+        print(f"Train: {dict(train_dist)}")
+        print(f"Val:   {dict(val_dist)}")
+        print(f"Test:  {dict(test_dist)}")
 
     def get_data_split(self, split_list, clip_dict):
         split = {'pose': [], 'label': [], 'video_name': [], 'metadata': []}
@@ -361,7 +456,14 @@ class MotionAGFormerPreprocessor(DataPreprocessor):
             self.place_depth_of_first_frame_to_zero()
 
         clip_dict = self.partition_videos(clip_length=self.params['source_seq_len'])
-        self.generate_leave_one_out_folds(clip_dict, save_dir, raw_data.labels_dict)
+
+        # 根据 validation_mode 选择生成方式
+        if self.params.get('validation_mode', 'losocv').lower() == 'losocv':
+            self.generate_leave_one_out_folds(clip_dict, save_dir, raw_data.labels_dict)
+        elif self.params['validation_mode'].lower() == 'standardcv':
+            self.generate_standard_cv_folds(clip_dict, save_dir, raw_data.labels_dict)
+        else:
+            raise ValueError(f"Unknown validation_mode: {self.params['validation_mode']}")
 
     def place_depth_of_first_frame_to_zero(self):
         for key in self.pose_dict.keys():
@@ -558,6 +660,7 @@ class ProcessedDataset(data.Dataset):
         super(ProcessedDataset, self).__init__()
         self._params = params
         self._mode = mode
+        self.validation_mode=params.get('validation_mode','losocv').lower()
         self.data_dir = data_dir
         self._task = downstream
 
@@ -589,25 +692,43 @@ class ProcessedDataset(data.Dataset):
     def load_data(self):
         dataset_name = self._params['dataset']
 
-        if self._mode == 'train':
-            train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train_{self.fold}.pkl"), "rb"))
+        if self.validation_mode == 'losocv':
+            if self._mode == 'train':
+                train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train_{self.fold}.pkl"), "rb"))
 
-        elif self._mode == 'test':
-            test_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_test_{self.fold if self._mode != 'test_all' else 'all'}.pkl"), "rb"))
+            elif self._mode == 'test':
+                test_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_test_{self.fold if self._mode != 'test_all' else 'all'}.pkl"), "rb"))
 
-        elif self._mode == 'val':
-            val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation_{self.fold}.pkl"), "rb"))
-        elif self._mode == 'train-eval':
-            train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train_{self.fold}.pkl"), "rb"))
-            val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation_{self.fold}.pkl"), "rb"))
-            train_data = {
-                'pose': [*train_data['pose'], *val_data['pose'],],
-                'label': [*train_data['label'], *val_data['label']],
-                'video_name': [*train_data['video_name'], *val_data['video_name']]
-            }
-        elif self._mode == 'test_all':
-            test_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_all.pkl"), "rb"))
-
+            elif self._mode == 'val':
+                val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation_{self.fold}.pkl"), "rb"))
+            elif self._mode == 'train-eval':
+                train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train_{self.fold}.pkl"), "rb"))
+                val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation_{self.fold}.pkl"), "rb"))
+                train_data = {
+                    'pose': [*train_data['pose'], *val_data['pose'],],
+                    'label': [*train_data['label'], *val_data['label']],
+                    'video_name': [*train_data['video_name'], *val_data['video_name']]
+                }
+            elif self._mode == 'test_all':
+                test_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_all.pkl"), "rb"))
+        elif self.validation_mode == 'standardcv':
+            if self._mode == 'train':
+                train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train.pkl"), "rb"))
+            elif self._mode == 'test':
+                test_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_test.pkl"), "rb"))
+            elif self._mode == 'val':
+                val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation.pkl"), "rb"))
+            elif self._mode == 'train-eval':
+                train_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_train.pkl"), "rb"))
+                val_data = pickle.load(open(os.path.join(self.data_dir, f"{dataset_name}_validation.pkl"), "rb"))
+                train_data = {
+                    'pose': [*train_data['pose'], *val_data['pose']],
+                    'label': [*train_data['label'], *val_data['label']],
+                    'video_name': [*train_data['video_name'], *val_data['video_name']],
+                    'metadata': [*train_data.get('metadata', []), *val_data.get('metadata', [])]
+                }
+        else:
+            raise ValueError(f"Unknown validation_mode: {validation_mode}")
 
         if self._mode == 'train':
             poses, labels, video_names, metadatas = self.data_generator(train_data, mode='train', fold_number=self.fold)
@@ -787,9 +908,12 @@ def dataset_factory(params, backbone, fold):
     
     data_dir = backbone_data_location_mapper[backbone]
 
+    med_status = params['med_status']       #None或者ON/OFF
+
+
     if not os.path.exists(data_dir):        #TODO:请记住,每次要跑一个模型的时候，如果之前没跑过，先去跑preprocess_pd;如果之前跑过了，希望重新生成LOSOCV来排除变量的时候，请删掉motione_evaluator/data/下的相应模型处理文件夹
         if params['dataset'] == 'PD':
-            raw_data = PDReader(params['data_path'], params['labels_path']) 
+            raw_data = PDReader(params['data_path'], params['labels_path'],med_status)
 
 
             '''
@@ -802,6 +926,8 @@ def dataset_factory(params, backbone, fold):
             #     augmenter = PoseSequenceAugmentation(params)
             #     raw_data = augmenter.augment_data(raw_data, params['augmentation'])
 
+            params['participant_number']=len(raw_data.participant_ID)
+
             Preprocessor = backbone_preprocessor_mapper[backbone]           #👈这就是上面说的容易出问题的原因，它放在这里面
             Preprocessor(data_dir, raw_data, params)
 
@@ -811,6 +937,17 @@ def dataset_factory(params, backbone, fold):
 
         else:
             raise NotImplementedError(f"dataset '{params['dataset']}' is not supported.")
+
+    validation_mode=params.get('validation_mode','losocv').lower()
+
+    if validation_mode == 'losocv':
+        if params['participant_number']<fold:
+            return None
+    elif validation_mode == 'standardcv':
+        # 标准CV: fold应该总是1，因为只有一个数据划分
+        if fold != 1:
+            print(f"Warning: Standard CV only supports fold=1, but got fold={fold}. Using fold=1.")
+            fold = 1
 
     use_validation = params['use_validation']
 
@@ -843,27 +980,7 @@ def dataset_factory(params, backbone, fold):
     eval_dataset = ProcessedDataset(data_dir, fold=fold, params=params, mode='val') if use_validation else None
     test_dataset = ProcessedDataset(data_dir, fold=fold, params=params, mode='test')
     
-    #Uncomment to save information about each subset of Data (SUB IDs and number of scores within each set)
-    # csv_file = 'folds_subs.csv'
-    # row = {
-    #     'foldnumber': fold,
-    #     'TrainSUB': ', '.join(extract_unique_subs(train_dataset)),
-    #     'ValSUB': ', '.join(extract_unique_subs(eval_dataset)),
-    #     'TestSUB': ', '.join(extract_unique_subs(test_dataset))
-    # }
-    # all_labels = set(range(0, train_dataset._params['num_classes']))
-    # train_label_counts = count_labels(train_dataset, all_labels)
-    # val_label_counts = count_labels(eval_dataset, all_labels)
-    # test_label_counts = count_labels(test_dataset, all_labels)
-    # for lbl, count in train_label_counts.items():
-    #     row[f'Train_score{lbl}'] = count
-    # for lbl, count in val_label_counts.items():
-    #     row[f'Val_score{lbl}'] = count
-    # for lbl, count in test_label_counts.items():
-    #     row[f'Test_score{lbl}'] = count
-    # df = pd.DataFrame([row])
-    # header = not pd.io.common.file_exists(csv_file)
-    # df.to_csv(csv_file, mode='a', index=False, header=header)
+
 
     train_dataset_fn = torch.utils.data.DataLoader(
         train_dataset,

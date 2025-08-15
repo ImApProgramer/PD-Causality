@@ -57,6 +57,16 @@ if __name__ == '__main__':
     
     parser.add_argument('--medication', default=0, type=int, help='add medication prob to the training [0 or 1]')
     parser.add_argument('--metadata', default='', type=str, help="add metadata prob to the training 'gender,age,bmi,height,weight'")
+    parser.add_argument(
+        '--med_status',
+        choices=['ON', 'OFF'],
+        default=None,
+        help="only ON/OFF samples are used(including training, validating, and testing"
+    )
+    parser.add_argument('--participant_number', default=23, type=int,
+                        help="all participants number")
+    parser.add_argument('--validation_mode', type=str, default='LOSOCV',
+                        help='the validation mode you want to use( LOSOCV, STANDARDCV )')
 
     args = parser.parse_args()
 
@@ -100,8 +110,12 @@ if __name__ == '__main__':
         else:
             raise NotImplementedError(f"Backbone '{param['backbone']}' does not exist.")
 
+        validation_mode=param['validation_mode']
         if param['dataset'] == 'PD':
-            num_folds = 23
+            if  validation_mode == 'LOSOCV':
+                num_folds = 23
+            elif validation_mode == 'STANDARDCV':
+                num_folds = 1      #标准cv
             params['num_classes'] = 3  
         else:
             raise NotImplementedError(f"dataset '{param['dataset']}' is not supported.")
@@ -109,5 +123,6 @@ if __name__ == '__main__':
         all_folds = range(1, num_folds + 1)
         set_random_seed(param['seed'])      #TODO:检查一下这个seed到底有没有作用？
 
+
+        # 使用LOSOCV模式
         test_and_report(params, new_params, all_folds, backbone_name, _DEVICE)
-            
