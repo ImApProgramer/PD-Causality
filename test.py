@@ -159,9 +159,10 @@ def run_fold_tests(params, all_folds, backbone_name, device, rep_out):
 def setup_datasets(params, backbone_name, all_folds):
     splits = []
     for fold in all_folds:
-        if dataset_factory(params, backbone_name, fold) is None:
+        dataset_result = dataset_factory(params, backbone_name, fold)
+        if dataset_result is None:
             continue
-        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights = dataset_factory(params, backbone_name, fold)
+        train_dataset_fn, test_dataset_fn, val_dataset_fn, class_weights = dataset_result
         splits.append((train_dataset_fn, val_dataset_fn, test_dataset_fn, class_weights))
     return splits
 
