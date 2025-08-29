@@ -789,12 +789,15 @@ def dataset_factory(params, backbone, fold):
     
     data_dir = backbone_data_location_mapper[backbone]
 
-    med_status = params['med_status']       #None或者ON/OFF
+    # med_status = params['med_status']       #None或者ON/OFF
 
 
     if not os.path.exists(data_dir):        #TODO:请记住,每次要跑一个模型的时候，如果之前没跑过，先去跑preprocess_pd;如果之前跑过了，希望重新生成LOSOCV来排除变量的时候，请删掉motione_evaluator/data/下的相应模型处理文件夹
         if params['dataset'] == 'PD':
-            raw_data = PDReader(params['data_path'], params['labels_path'],med_status)
+            raw_data = PDReader(params['data_path']
+                                , params['labels_path']
+                                # ,med_status
+                                )
 
 
             '''
@@ -820,8 +823,8 @@ def dataset_factory(params, backbone, fold):
             raise NotImplementedError(f"dataset '{params['dataset']}' is not supported.")
 
 
-    if params['participant_number']<fold:
-        return None
+    # if params['participant_number']<fold:
+    #     return None
 
 
     use_validation = params['use_validation']
