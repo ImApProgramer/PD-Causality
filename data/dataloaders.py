@@ -850,7 +850,7 @@ def dataset_factory(params, backbone, fold):
         ])
 
     params['metadata'] = [
-        #'gender', 'age', 'height', 'weight', 'bmi'
+        'gender', 'age', 'height', 'weight', 'bmi'
     ]       #修改这一行用于稍后的ProcessedDataset不要出错;经过验证后面确实提取出了正确的metadata数据;但是发现在eval_encoder中实际上处理了
 
     train_dataset = ProcessedDataset(data_dir, fold=fold, params=params,

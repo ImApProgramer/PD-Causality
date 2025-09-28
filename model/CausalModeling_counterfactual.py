@@ -111,6 +111,40 @@ class GradReverse(Function):
 def grad_reverse(x, lambd=1.0):
     return GradReverse.apply(x, lambd)
 
+
+def get_different_label_shuffled_idx(labels):
+    """
+    为每个样本找到一个标签不同的样本索引进行交换。
+    如果找不到，则返回原始索引，不进行交换。
+    """
+    batch_size = labels.size(0)
+    shuffled_idx = torch.zeros_like(labels).long()
+
+    # 将标签相同的样本分组，确保字典的键是整数
+    unique_labels = torch.unique(labels)
+    groups = {label.item(): (labels == label).nonzero(as_tuple=True)[0] for label in unique_labels}
+
+    # 为每个样本找到一个不同标签的样本索引
+    for i in range(batch_size):
+        current_label = labels[i].item()
+
+        # 找到所有标签不同的组，确保列表中的元素是整数
+        other_labels = [label.item() for label in unique_labels if label.item() != current_label]
+
+        # 如果存在不同标签的样本
+        if other_labels:
+            # 随机选择一个不同标签的组
+            target_label = other_labels[torch.randint(0, len(other_labels), (1,)).item()]
+
+            # 从该组中随机选择一个样本索引，此时 target_label 已经是整数
+            target_indices = groups[target_label]
+            shuffled_idx[i] = target_indices[torch.randint(0, len(target_indices), (1,)).item()]
+        else:
+            # 如果批次内所有样本标签都相同，则不进行交换，保持原样
+            shuffled_idx[i] = i
+
+    return shuffled_idx
+
 class CounterfactualCausalModeling(nn.Module):
     """
     Stage1: base model
@@ -162,7 +196,7 @@ class CounterfactualCausalModeling(nn.Module):
         #     dropout=0.2
         # )
 
-        self.regressor = OrdinalHead(
+        self.regressor = OrdinalHead(       #事实回归头
             input_dim=z_dim,  # 而不是 z_dim*2
             hidden_dim=256,
             num_classes=3,
@@ -176,7 +210,40 @@ class CounterfactualCausalModeling(nn.Module):
             nn.Linear(hidden_dim, input_dim)  # 重构回 backbone 的 feature dim
         )
 
-    def forward(self, inputs, labels= None):
+
+        # 显式预测混淆变量的各个预测
+        # === Confounding Prediction Heads ===
+        self.age_predictor = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)  # age is a continuous variable
+        )
+        self.gender_predictor = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2)  # gender is a binary variable (0 or 1)
+        )
+        # Add other predictors as needed for height, weight, BMI
+        self.bmi_predictor = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+        self.height_predictor = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+        self.weight_predictor = nn.Sequential(
+            nn.Linear(z_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+
+    def forward(self, inputs, labels= None,metadata=None):
         # === backbone features ===
         features = self.backbone(inputs)  # [B, T, J, C]
 
@@ -193,32 +260,39 @@ class CounterfactualCausalModeling(nn.Module):
         # === encoded features ===
         # 病理特征和混淆特征都从同一个backbone出来
         z_g = self.disease_encoder(features)  # [B, z_dim]
-        z_c = self.confound_encoder(features)   # [B, z_dim]，准备通过GRL进行病理的预测，但是梯度反转
+        z_c = self.confound_encoder(features)   # [B, z_dim]
 
+        # 现在获取了两个不同方面的特征，需要做的就是通过干预来分离病理因素和混淆因素
+        # 以下是具体的实施方法
+
+        # 1. 主任务，确保z_g包含了足够信息来进行正确分类
         # === ordinal prediction ===
         z_g_pooled = z_g.mean(dim=(1, 2))
         logits = self.regressor(z_g_pooled)  # [B, K-1]
 
-
-
+        # 2. 让z_c无法预测病理标签，通过无监督的GRL
+        # 但是这本质上只是让模型把“能预测疾病标签的信息”都塞到z_g里面，其余的都塞到z_c里面，并没有实现解耦
+        # 假设有一个混淆变量，例如年龄，与疾病标签高度相关，但是它实际上通过X(疾病因素)->M(年龄)->Y(标签）的因果链来影响，在这种情况下，年龄依然会被塞入z_g里面，没有实现因果解耦
+        # 因此在这种情况下，显式加入混淆因素信息作为监督信号是必要的，明确指定混淆因素（如年龄）作为z编码_c的任务;注意GRL依然需要保留，这样才是“不能预测病理但可以预测混淆变量”的双重保证
         # === GRL ===
-        # 让z_c无法预测病理标签
         z_c_pooled = z_c.mean(dim=(1, 2))     # 进行时间和关节维度上的池化
         rev_zc=grad_reverse(z_c_pooled,lambd=1.0)
-        confound_logits=self.regressor(rev_zc)
 
+        #各个混淆变量的预测结果
+        age_preds = self.age_predictor(rev_zc)
+        gender_preds = self.gender_predictor(rev_zc)
+        bmi_preds = self.bmi_predictor(rev_zc)
+        height_preds=self.height_predictor(rev_zc)
+        weight_preds=self.weight_predictor(rev_zc)
 
+        # confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
 
+        # 3. 重构损失，避免退化，确保编译后的z_g和z_c依然能够还原出原本的信息
         # === ReCon ===
-        # 重构损失，避免退化
         recon_in = torch.cat([z_g,z_c], dim = -1)       #在C维度上进行拼接
         recon_features = self.decoder(recon_in)     #进行decoder解码
 
-
-        # === counterfactual ===
-        # 让模型知道标签必须随着z_g变化，而对z_c保持不变
-        # ---- 构造交换样本 ----
-        counterfactual_logits = None
+        counterfactual_logits=None
         shuffle_idx=None
         if labels is not None:
             B = z_g_pooled.shape[0]
@@ -232,15 +306,27 @@ class CounterfactualCausalModeling(nn.Module):
 
 
 
+
         out = {
-            "logits": logits,
-            "disease_features": z_g,
-            "confound_logits": confound_logits,
-            "recon_features": recon_features,
-            "original_features": features,
-            "counterfactual_logits": counterfactual_logits,
+            "logits": logits,       #z_g经过池化后输出的回归结果
+            # "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
+
+            "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
+
+            "original_features": features,  # 原始特征，用于和重构特征进行比较
+            "disease_features": z_g_pooled,    #病理特征z_g本身，没有经过池化
+            "confound_features": z_c_pooled,  # 同上
+            "recon_features": recon_features,   #重建得到的特征
+
+            "age_preds": age_preds,
+            "gender_preds": gender_preds,
+            "bmi_preds": bmi_preds,
+            "height_preds": height_preds,
+            "weight_preds": weight_preds,
+
             "shuffle_idx": shuffle_idx,  # 将索引返回
         }
+
         return out
 
 
@@ -296,3 +382,17 @@ class CounterfactualCausalModeling(nn.Module):
 # #
 
 
+
+# counterfactual_logits = None
+        # shuffle_idx=None
+        #
+        # if labels is not None:
+        #     B = z_c_pooled.shape[0]
+        #     shuffle_idx = torch.randperm(B).to(labels.device)
+        #
+        #     # 保持 z_g 不变，交换 confound 特征
+        #     z_c_swapped = z_c_pooled[shuffle_idx]
+        #     z_cf = torch.cat([z_g_pooled, z_c_swapped], dim=-1)
+        #
+        #     # 用新的 head（如果只想看 z_g，可以直接用 z_g；如果希望利用 z_c，最好用 concat）
+        #     counterfactual_logits = self.regressor(z_g_pooled)  # 这里保持不变，关键是 loss 写法

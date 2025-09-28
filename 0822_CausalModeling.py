@@ -189,6 +189,12 @@ def save_checkpoint(checkpoint_root_path, epoch, lr, optimizer, model, best_accu
         'best_accuracy': best_accuracy
     }, checkpoint_path)
 
+def orthogonal_loss(z1, z2):
+    z1 = F.normalize(z1, dim=-1)
+    z2 = F.normalize(z2, dim=-1)
+    cos_sim = torch.sum(z1 * z2, dim=-1)  # batch-wise inner product
+    return (cos_sim ** 2).mean()
+
 def train_model(params, class_weights, train_loader, val_loader, model, fold, backbone_name, mode="RUN"):
 
     optimizer = torch.optim.AdamW(
@@ -211,7 +217,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     stage1_epochs = 5  # 阶段一：只训练主分类任务
 
-    lambd1=0.1
+    lambd1=0.01
     lambd2=0.03
     lambd3=0.05
 
@@ -271,26 +277,63 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
         for x, y, video_idx, metadata in batch_loop:
             x, y = x.to(device), y.to(device).long()
+            metadata = metadata.to(device)
+
             optimizer.zero_grad()
 
             # 传递标签给 forward 方法，用于反事实损失计算
-            outputs = model(x, labels=y)
+            outputs = model(x, labels=y,metadata=metadata)
             logits = outputs["logits"]
 
             # 计算所有损失项
-            confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
+            # 2.GRL对应的confound损失
+            # confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
+
+            confound_losses = []
+            # Age prediction loss (MSE)
+
+            age_data = metadata[:, 0]
+            gender_data = metadata[:, 1]
+            bmi_data = metadata[:, 2]
+            height_data = metadata[:, 3]
+            weight_data = metadata[:, 4]
+
+            age_loss = F.mse_loss(outputs["age_preds"].squeeze(), age_data.float())
+            confound_losses.append(age_loss)
+            # Gender prediction loss (CrossEntropy)
+            gender_loss = F.cross_entropy(outputs["gender_preds"], gender_data.long())
+            confound_losses.append(gender_loss)
+            # BMI prediction loss (MSE)
+            bmi_loss = F.mse_loss(outputs["bmi_preds"].squeeze(), bmi_data.float())
+            confound_losses.append(bmi_loss)
+            height_loss = F.mse_loss(outputs["height_preds"].squeeze(),height_data.float())
+            confound_losses.append(height_loss)
+            weight_loss = F.mse_loss(outputs["weight_preds"].squeeze(),weight_data.float())
+            confound_losses.append(weight_loss)
+
+            # 将所有混淆损失加权求和
+            total_confound_loss = sum(confound_losses) * lambd1
+
+            # 3.重构对应的重构损失
             recon_loss = lambd2 * F.mse_loss(
                 outputs["recon_features"].mean(dim=(1, 2)),
                 outputs["original_features"].mean(dim=(1, 2))
             )
+            # 4.反事实干预对应的损失
+            # counterfactual_loss = 0
+            # if outputs["counterfactual_logits"] is not None:
+            #     shuffle_idx = outputs["shuffle_idx"]    # the shuffled indexes
+            #     y_swapped = y[shuffle_idx]              # the label of it
+            #     counterfactual_loss = lambd3 * F.mse_loss(outputs["counterfactual_logits"], y_swapped)
 
-            counterfactual_loss = 0
+            counterfactual_loss = 0.0
+
             if outputs["counterfactual_logits"] is not None:
                 shuffle_idx = outputs["shuffle_idx"]
                 y_swapped = y[shuffle_idx]
                 counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
 
-            loss = coral_loss(logits, y, num_classes) + confound_loss + recon_loss + counterfactual_loss
+            loss = coral_loss(logits, y, num_classes) + total_confound_loss + recon_loss + counterfactual_loss
 
             loss.backward()
             optimizer.step()
@@ -340,110 +383,6 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 f"[EARLY STOPPING] Stop training at epoch {epoch + 1 + stage1_epochs} | best val_f1={best_val_f1:.4f}")
             break
 
-    # for epoch in loop:
-    #     model.train()
-    #     train_loss = AverageMeter()
-    #     train_acc = AverageMeter()
-    #     train_f1 = AverageMeter()
-    #
-    #     video_predictions = defaultdict(list)
-    #     video_labels = {}
-    #     all_preds = []
-    #     all_labels = []
-    #
-    #
-    #     for x, y, video_idx, metadata in train_loader:
-    #
-    #         # print(f"Min label: {y.min()}, Max label: {y.max()}")
-    #         assert y.min() >= 0 and y.max() < num_classes, f"Invalid label range: {y.min()} - {y.max()}"
-    #
-    #         x, y = x.to(device), y.to(device).long()
-    #
-    #
-    #
-    #         optimizer.zero_grad()
-    #         outputs = model(x,labels=y)                        # forward
-    #         logits = outputs["logits"]                # [B, K-1]
-    #
-    #         #  losses
-    #         confound_loss=lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
-    #         recon_loss = lambd2 * F.mse_loss(outputs["recon_features"].mean(dim=(1, 2)),
-    #                                          outputs["original_features"].mean(dim=(1, 2)))
-    #         counterfactual_loss = 0
-    #         if outputs["counterfactual_logits"] is not None:
-    #             # 使用从forward返回的shuffle_idx来打乱y
-    #             shuffle_idx = outputs["shuffle_idx"]
-    #             y_swapped = y[shuffle_idx]
-    #             counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
-    #
-    #         loss = coral_loss(logits, y, num_classes) + confound_loss +recon_loss + counterfactual_loss
-    #
-    #
-    #         # backward
-    #         loss.backward()
-    #         optimizer.step()
-    #
-    #         # update loss
-    #         train_loss.update(loss.item(), x.size(0))
-    #
-    #         # 预测和计算metrics
-    #         with torch.no_grad():
-    #             # CORAL预测逻辑：每个阈值>0.5就算通过
-    #             probs = torch.sigmoid(logits)
-    #             preds = (probs > 0.5).sum(dim=1)  # [B]
-    #
-    #             # 计算batch准确率
-    #             batch_acc = (preds == y).float().mean().item()
-    #             train_acc.update(batch_acc, x.size(0))
-    #
-    #             # 收集所有预测和标签用于F1计算
-    #             all_preds.extend(preds.cpu().numpy())
-    #             all_labels.extend(y.cpu().numpy())
-    #
-    #         for i, idx in enumerate(video_idx):
-    #             video_predictions[idx.item()].append(preds[i].detach().cpu())
-    #             video_labels[idx.item()] = y[i].item()
-    #
-    #     scheduler.step()
-    #
-    #     # 计算F1分数（在所有数据上计算）
-    #     all_preds = np.array(all_preds)
-    #     all_labels = np.array(all_labels)
-    #     train_f1_score = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
-    #
-    #
-    #     # 运行验证
-    #     val_metrics = validate_model(model, val_loader, device, num_classes)
-    #     lr_backbone = optimizer.param_groups[0]['lr']
-    #
-    #     print(f"Epoch {epoch} | "
-    #           f"Train Loss: {train_loss.avg:.4f} | "
-    #           f"Train Acc: {train_acc.avg:.4f} | "
-    #           f"Train F1: {train_f1_score:.4f} | "
-    #           f"Val Acc: {val_metrics['acc']:.4f} | "
-    #           f"Val F1: {val_metrics['f1']:.4f}"
-    #           f"Val F1: {val_metrics['f1']:.4f}"
-    #           )
-    #
-    #
-    #     val_f1_score=val_metrics['f1']
-    #     if val_f1_score > best_val_f1:      #best模型的保存逻辑
-    #         best_val_f1 = val_f1_score
-    #         patience_counter = 0  # reset
-    #         save_checkpoint(checkpoint_root_path, epoch, lr_backbone, optimizer, model,
-    #                         best_val_f1, fold, latest=False)
-    #         print(f"[INFO] Best checkpoint saved at epoch {epoch} with val_f1_score={val_f1_score:.4f}")
-
-
-        # else:
-        #     patience_counter += 1
-        #     print(f"[INFO] No improvement. patience_counter = {patience_counter}/{patience}")
-
-
-        # # 触发早停
-        # if patience_counter >= patience:
-        #     print(f"[EARLY STOPPING] Stop training at epoch {epoch} | best val_f1={best_val_f1:.4f}")
-        #     break
 
     lr_backbone = optimizer.param_groups[0]['lr']
     if mode == "RUN":
