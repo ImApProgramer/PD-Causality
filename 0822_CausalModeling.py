@@ -217,7 +217,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     stage1_epochs = 5  # 阶段一：只训练主分类任务
 
-    lambd1=0.0
+    lambd1=0.01
     lambd2=0.03
     lambd3=0.05
 
