@@ -287,32 +287,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             # 计算所有损失项
             # 2.GRL对应的confound损失
-            # confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
+            confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
 
-            confound_losses = []
-            # Age prediction loss (MSE)
 
-            age_data = metadata[:, 0]
-            gender_data = metadata[:, 1]
-            bmi_data = metadata[:, 2]
-            height_data = metadata[:, 3]
-            weight_data = metadata[:, 4]
-
-            age_loss = F.mse_loss(outputs["age_preds"].squeeze(), age_data.float())
-            confound_losses.append(age_loss)
-            # Gender prediction loss (CrossEntropy)
-            gender_loss = F.cross_entropy(outputs["gender_preds"], gender_data.long())
-            confound_losses.append(gender_loss)
-            # BMI prediction loss (MSE)
-            bmi_loss = F.mse_loss(outputs["bmi_preds"].squeeze(), bmi_data.float())
-            confound_losses.append(bmi_loss)
-            height_loss = F.mse_loss(outputs["height_preds"].squeeze(),height_data.float())
-            confound_losses.append(height_loss)
-            weight_loss = F.mse_loss(outputs["weight_preds"].squeeze(),weight_data.float())
-            confound_losses.append(weight_loss)
-
-            # 将所有混淆损失加权求和
-            total_confound_loss = sum(confound_losses) * lambd1
 
             # 3.重构对应的重构损失
             recon_loss = lambd2 * F.mse_loss(
@@ -326,14 +303,14 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             #     y_swapped = y[shuffle_idx]              # the label of it
             #     counterfactual_loss = lambd3 * F.mse_loss(outputs["counterfactual_logits"], y_swapped)
 
-            counterfactual_loss = 0.0
+            # counterfactual_loss = 0.0
+            #
+            # if outputs["counterfactual_logits"] is not None:
+            #     shuffle_idx = outputs["shuffle_idx"]
+            #     y_swapped = y[shuffle_idx]
+            #     counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
 
-            if outputs["counterfactual_logits"] is not None:
-                shuffle_idx = outputs["shuffle_idx"]
-                y_swapped = y[shuffle_idx]
-                counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
-
-            loss = coral_loss(logits, y, num_classes) + total_confound_loss + recon_loss + counterfactual_loss
+            loss = coral_loss(logits, y, num_classes)  + recon_loss + confound_loss #+ counterfactual_loss
 
             loss.backward()
             optimizer.step()

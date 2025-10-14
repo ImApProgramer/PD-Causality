@@ -211,36 +211,7 @@ class CounterfactualCausalModeling(nn.Module):
         )
 
 
-        # 显式预测混淆变量的各个预测
-        # === Confounding Prediction Heads ===
-        self.age_predictor = nn.Sequential(
-            nn.Linear(z_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)  # age is a continuous variable
-        )
-        self.gender_predictor = nn.Sequential(
-            nn.Linear(z_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2)  # gender is a binary variable (0 or 1)
-        )
-        # Add other predictors as needed for height, weight, BMI
-        self.bmi_predictor = nn.Sequential(
-            nn.Linear(z_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
 
-        self.height_predictor = nn.Sequential(
-            nn.Linear(z_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
-
-        self.weight_predictor = nn.Sequential(
-            nn.Linear(z_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
 
 
     def forward(self, inputs, labels= None,metadata=None):
@@ -278,29 +249,24 @@ class CounterfactualCausalModeling(nn.Module):
         z_c_pooled = z_c.mean(dim=(1, 2))     # 进行时间和关节维度上的池化
         rev_zc=grad_reverse(z_c_pooled,lambd=1.0)
 
-        #各个混淆变量的预测结果
-        age_preds = self.age_predictor(rev_zc)
-        gender_preds = self.gender_predictor(rev_zc)
-        bmi_preds = self.bmi_predictor(rev_zc)
-        height_preds=self.height_predictor(rev_zc)
-        weight_preds=self.weight_predictor(rev_zc)
 
-        # confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
+        confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
 
         # 3. 重构损失，避免退化，确保编译后的z_g和z_c依然能够还原出原本的信息
         # === ReCon ===
         recon_in = torch.cat([z_g,z_c], dim = -1)       #在C维度上进行拼接
         recon_features = self.decoder(recon_in)     #进行decoder解码
 
-        counterfactual_logits=None
-        shuffle_idx=None
-        if labels is not None:
-            B = z_g_pooled.shape[0]
-            shuffle_idx = torch.randperm(B).to(labels.device)
-
-            # 将交换后的疾病特征输入到回归头进行预测
-            z_g_swapped = z_g_pooled[shuffle_idx]
-            counterfactual_logits = self.regressor(z_g_swapped)
+        # # 4. 反事实损失，进行批次内特征交换
+        # counterfactual_logits=None
+        # shuffle_idx=None
+        # if labels is not None:
+        #     B = z_g_pooled.shape[0]
+        #     shuffle_idx = torch.randperm(B).to(labels.device)
+        #
+        #     # 将交换后的疾病特征输入到回归头进行预测
+        #     z_g_swapped = z_g_pooled[shuffle_idx]
+        #     counterfactual_logits = self.regressor(z_g_swapped)
 
 
 
@@ -309,22 +275,16 @@ class CounterfactualCausalModeling(nn.Module):
 
         out = {
             "logits": logits,       #z_g经过池化后输出的回归结果
-            # "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
+            "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
 
-            "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
+            # "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
 
             "original_features": features,  # 原始特征，用于和重构特征进行比较
             "disease_features": z_g_pooled,    #病理特征z_g本身，没有经过池化
             "confound_features": z_c_pooled,  # 同上
             "recon_features": recon_features,   #重建得到的特征
 
-            "age_preds": age_preds,
-            "gender_preds": gender_preds,
-            "bmi_preds": bmi_preds,
-            "height_preds": height_preds,
-            "weight_preds": weight_preds,
-
-            "shuffle_idx": shuffle_idx,  # 将索引返回
+            # "shuffle_idx": shuffle_idx,  # 将索引返回
         }
 
         return out
