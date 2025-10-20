@@ -217,9 +217,32 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     stage1_epochs = 5  # 阶段一：只训练主分类任务
 
-    lambd1=0
+    lambd1=0.01
     lambd2=0.03
     lambd3=0.05
+
+    # 新增 L_CT 损失的超参数和 Memory Bank 初始化
+    # ----------------------------------------------------
+    lambd4 = params.get('lambd4', 0.05)  # L_CT 损失权重 (λ2)
+    alpha_ct = params.get('alpha_ct', 0.1)  # L_CT 损失的 margin (α')
+    k_p = params.get('k_p', 5)  # P_hard 采样的数量 K_P
+    k_n = params.get('k_n', 5)  # N_special 采样的数量 K_N
+
+    # --- 关键：获取训练集总样本数 ---
+    N_train_samples = len(train_loader.dataset)
+    print(f"[INFO] Total training samples detected: {N_train_samples}")
+
+    # --- 获取设备信息 ---
+    device = next(model.parameters()).device
+
+    # 初始化 Zc Memory Bank
+    memory_bank_zc = MemoryBank_Zc(
+        total_samples=N_train_samples,
+        z_dim=model.z_dim,
+        momentum=0.999,  # MoCo 推荐值
+        device=device
+    )
+
 
     # -------------------
     # Stage 1: 基础模型训练
@@ -258,6 +281,26 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                             best_val_f1, fold, latest=True)
             print("[INFO] Stage 1 finished. Saved model for Stage 2.")
 
+
+    # --- 预填充 Memory Bank ---
+    print("\n--- Pre-filling Zc Memory Bank with initial features ---")
+    model.eval()
+    with torch.no_grad():
+        for x_init, y_init, video_idx_init, _ in train_loader:
+            x_init, y_init = x_init.to(device), y_init.to(device).long()
+            video_idx_init = video_idx_init.to(device).long()
+
+            outputs_init = model(x_init)
+            zc_pooled_init = outputs_init["confound_features"]
+            zc_norm_init = F.normalize(zc_pooled_init, dim=1)
+
+            # 更新 Memory Bank 的特征和 ID 映射
+            memory_bank_zc.update(zc_norm_init, y_init, video_idx_init)
+
+            if memory_bank_zc.filled_count >= N_train_samples:
+                break
+    print(f"--- Memory Bank pre-filled with {memory_bank_zc.filled_count} samples. ---")
+
     # -------------------
     # Stage 2: 因果解耦训练
     # -------------------
@@ -277,6 +320,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
         for x, y, video_idx, metadata in batch_loop:
             x, y = x.to(device), y.to(device).long()
+
+            video_idx = video_idx.to(device).long()
+
             metadata = metadata.to(device)
 
             optimizer.zero_grad()
@@ -285,13 +331,38 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             outputs = model(x, labels=y,metadata=metadata)
             logits = outputs["logits"]
 
+            # --- 1. 获取 Zc 特征 ---
+            zc_pooled = outputs["confound_features"]
+            # 对当前 Batch 的 Zc 特征进行归一化
+            zc_norm = F.normalize(zc_pooled, dim=1)
+
+            # --- 2. L_CT 损失计算 ---
+            # 挖掘硬样本
+            zc_p_hard, zc_n_special = memory_bank_zc.hard_sample_mining(
+                zc_norm, y, k_p=k_p, k_n=k_n
+            )
+
+            # L_CT 损失： Sim(A, N_special) - Sim(A, P_hard) + alpha'
+            sim_an = torch.sum(zc_norm * zc_n_special, dim=1)
+            sim_ap = torch.sum(zc_norm * zc_p_hard, dim=1)
+
+            loss_ct = lambd4 * torch.mean(
+                torch.relu(sim_an - sim_ap + alpha_ct)
+            )
+
+            # --- 3. Memory Bank 动量更新 ---
+            # 使用 detach() 确保梯度不流向 Memory Bank 的特征
+            memory_bank_zc.update(zc_norm.detach(), y, video_idx)
+
+            main_loss = coral_loss(logits, y, num_classes)
+
             # 计算所有损失项
-            # 2.GRL对应的confound损失
+            # GRL对应的confound损失
             confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
 
 
 
-            # 3.重构对应的重构损失
+            # 重构对应的重构损失
             recon_loss = lambd2 * F.mse_loss(
                 outputs["recon_features"].mean(dim=(1, 2)),
                 outputs["original_features"].mean(dim=(1, 2))
@@ -310,7 +381,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             #     y_swapped = y[shuffle_idx]
             #     counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
 
-            loss = coral_loss(logits, y, num_classes)  + recon_loss + confound_loss #+ counterfactual_loss
+            loss = main_loss  + recon_loss + confound_loss #+ counterfactual_loss
 
             loss.backward()
             optimizer.step()
@@ -325,7 +396,13 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(y.cpu().numpy())
 
-            batch_loop.set_postfix(loss=train_loss.avg, acc=train_acc.avg)
+            batch_loop.set_postfix(
+                Total=train_loss.avg,
+                Main=main_loss.item(),
+                Recon=recon_loss.item(),
+                Conf=confound_loss.item(),
+                CT=loss_ct.item()  # 新增 CT 损失显示
+            )
 
         scheduler.step()
 
