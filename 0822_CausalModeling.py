@@ -381,7 +381,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             #     y_swapped = y[shuffle_idx]
             #     counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
 
-            loss = main_loss  + recon_loss + confound_loss #+ counterfactual_loss
+            loss = main_loss  + recon_loss + confound_loss + loss_ct #+ counterfactual_loss
 
             loss.backward()
             optimizer.step()
