@@ -297,7 +297,7 @@ class CounterfactualCausalModeling(nn.Module):
         # )
 
         self.regressor = OrdinalHead(       #事实回归头
-            input_dim=z_dim,  # 而不是 z_dim*2
+            input_dim=input_dim,  # 而不是 z_dim*2
             hidden_dim=256,
             num_classes=3,
             dropout=0.2
@@ -330,32 +330,35 @@ class CounterfactualCausalModeling(nn.Module):
 
         # === encoded features ===
         # 病理特征和混淆特征都从同一个backbone出来
-        z_g = self.disease_encoder(features)  # [B, z_dim]
-        z_c = self.confound_encoder(features)   # [B, z_dim]
+        # z_g = self.disease_encoder(features)  # [B, z_dim]
+        # z_c = self.confound_encoder(features)   # [B, z_dim]
 
         # 现在获取了两个不同方面的特征，需要做的就是通过干预来分离病理因素和混淆因素
         # 以下是具体的实施方法
 
         # 1. 主任务，确保z_g包含了足够信息来进行正确分类
         # === ordinal prediction ===
-        z_g_pooled = z_g.mean(dim=(1, 2))
-        logits = self.regressor(z_g_pooled)  # [B, K-1]
+        # z_g_pooled = z_g.mean(dim=(1, 2))
+        # logits = self.regressor(z_g_pooled)  # [B, K-1]
+
+        feature_pooled = features.mean(dim=(1,2))
+        logits= self.regressor(feature_pooled)
 
         # 2. 让z_c无法预测病理标签，通过无监督的GRL
         # 但是这本质上只是让模型把“能预测疾病标签的信息”都塞到z_g里面，其余的都塞到z_c里面，并没有实现解耦
         # 假设有一个混淆变量，例如年龄，与疾病标签高度相关，但是它实际上通过X(疾病因素)->M(年龄)->Y(标签）的因果链来影响，在这种情况下，年龄依然会被塞入z_g里面，没有实现因果解耦
         # 因此在这种情况下，显式加入混淆因素信息作为监督信号是必要的，明确指定混淆因素（如年龄）作为z编码_c的任务;注意GRL依然需要保留，这样才是“不能预测病理但可以预测混淆变量”的双重保证
         # === GRL ===
-        z_c_pooled = z_c.mean(dim=(1, 2))     # 进行时间和关节维度上的池化
-        rev_zc=grad_reverse(z_c_pooled,lambd=1.0)
+        # z_c_pooled = z_c.mean(dim=(1, 2))     # 进行时间和关节维度上的池化
+        # rev_zc=grad_reverse(z_c_pooled,lambd=1.0)
 
 
-        confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
+        # confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
 
         # 3. 重构损失，避免退化，确保编译后的z_g和z_c依然能够还原出原本的信息
         # === ReCon ===
-        recon_in = torch.cat([z_g,z_c], dim = -1)       #在C维度上进行拼接
-        recon_features = self.decoder(recon_in)     #进行decoder解码
+        # recon_in = torch.cat([z_g,z_c], dim = -1)       #在C维度上进行拼接
+        # recon_features = self.decoder(recon_in)     #进行decoder解码
 
         # # 4. 反事实损失，进行批次内特征交换
         # counterfactual_logits=None
@@ -375,14 +378,14 @@ class CounterfactualCausalModeling(nn.Module):
 
         out = {
             "logits": logits,       #z_g经过池化后输出的回归结果
-            "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
-
-            # "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
-
-            "original_features": features,  # 原始特征，用于和重构特征进行比较
-            "disease_features": z_g_pooled,    #病理特征z_g本身，没有经过池化
-            "confound_features": z_c_pooled,  # 同上
-            "recon_features": recon_features,   #重建得到的特征
+            # "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
+            #
+            # # "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
+            #
+            # "original_features": features,  # 原始特征，用于和重构特征进行比较
+            # "disease_features": z_g_pooled,    #病理特征z_g本身，没有经过池化
+            # "confound_features": z_c_pooled,  # 同上
+            # "recon_features": recon_features,   #重建得到的特征
 
             # "shuffle_idx": shuffle_idx,  # 将索引返回
         }
