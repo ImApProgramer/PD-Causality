@@ -256,23 +256,6 @@ class CounterfactualCausalModeling(nn.Module):
         self.input_dim = input_dim
         self.z_dim = z_dim
 
-        # === Disease-related and Confounding Encoders === #
-        self.disease_encoder = MLPEncoder(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=z_dim,
-            num_layers=3,
-            dropout=0.1
-        )
-
-        self.confound_encoder = MLPEncoder(         # 需要加入正交损失或者对抗约束
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            output_dim=z_dim,
-            num_layers=3,
-            dropout=0.1
-        )
-
 
 
         # === Shared Regression Head === #
@@ -303,18 +286,16 @@ class CounterfactualCausalModeling(nn.Module):
             dropout=0.2
         )
 
-        # 重构
-        self.decoder = nn.Sequential(
-            nn.Linear(z_dim * 2 , hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, input_dim)  # 重构回 backbone 的 feature dim
-        )
+
+        # 主要使用回归头 - 为GRL提供丰富梯度
+        self.bmi_regressor = nn.Linear(input_dim, 1)
+        self.age_regressor = nn.Linear(input_dim, 1)
 
 
 
 
 
-    def forward(self, inputs, labels= None,metadata=None):
+    def forward(self, inputs, grl_lambda=0.0):
         # === backbone features ===
         features = self.backbone(inputs)  # [B, T, J, C]
 
@@ -328,48 +309,18 @@ class CounterfactualCausalModeling(nn.Module):
             features = features.expand(B, T, V, C)  # [B, T, V, C] = [B, T, J, C]
 
 
-        # === encoded features ===
-        # 病理特征和混淆特征都从同一个backbone出来
-        # z_g = self.disease_encoder(features)  # [B, z_dim]
-        # z_c = self.confound_encoder(features)   # [B, z_dim]
 
-        # 现在获取了两个不同方面的特征，需要做的就是通过干预来分离病理因素和混淆因素
-        # 以下是具体的实施方法
-
-        # 1. 主任务，确保z_g包含了足够信息来进行正确分类
-        # === ordinal prediction ===
-        # z_g_pooled = z_g.mean(dim=(1, 2))
-        # logits = self.regressor(z_g_pooled)  # [B, K-1]
 
         feature_pooled = features.mean(dim=(1,2))
         logits= self.regressor(feature_pooled)
 
-        # 2. 让z_c无法预测病理标签，通过无监督的GRL
-        # 但是这本质上只是让模型把“能预测疾病标签的信息”都塞到z_g里面，其余的都塞到z_c里面，并没有实现解耦
-        # 假设有一个混淆变量，例如年龄，与疾病标签高度相关，但是它实际上通过X(疾病因素)->M(年龄)->Y(标签）的因果链来影响，在这种情况下，年龄依然会被塞入z_g里面，没有实现因果解耦
-        # 因此在这种情况下，显式加入混淆因素信息作为监督信号是必要的，明确指定混淆因素（如年龄）作为z编码_c的任务;注意GRL依然需要保留，这样才是“不能预测病理但可以预测混淆变量”的双重保证
-        # === GRL ===
-        # z_c_pooled = z_c.mean(dim=(1, 2))     # 进行时间和关节维度上的池化
-        # rev_zc=grad_reverse(z_c_pooled,lambd=1.0)
+        # === GRL分支 ===
+        # 应用梯度反转
+        grl_features = grad_reverse(feature_pooled, grl_lambda)  # [B, C]
 
-
-        # confound_logits=self.regressor(rev_zc)  #用同样的回归头进行病理标签预测
-
-        # 3. 重构损失，避免退化，确保编译后的z_g和z_c依然能够还原出原本的信息
-        # === ReCon ===
-        # recon_in = torch.cat([z_g,z_c], dim = -1)       #在C维度上进行拼接
-        # recon_features = self.decoder(recon_in)     #进行decoder解码
-
-        # # 4. 反事实损失，进行批次内特征交换
-        # counterfactual_logits=None
-        # shuffle_idx=None
-        # if labels is not None:
-        #     B = z_g_pooled.shape[0]
-        #     shuffle_idx = torch.randperm(B).to(labels.device)
-        #
-        #     # 将交换后的疾病特征输入到回归头进行预测
-        #     z_g_swapped = z_g_pooled[shuffle_idx]
-        #     counterfactual_logits = self.regressor(z_g_swapped)
+        # Non-ID预测
+        bmi_pred = self.bmi_regressor(grl_features)  # [B, 1]
+        age_pred = self.age_regressor(grl_features)  # [B, 1]
 
 
 
@@ -378,16 +329,8 @@ class CounterfactualCausalModeling(nn.Module):
 
         out = {
             "logits": logits,       #z_g经过池化后输出的回归结果
-            # "confound_logits": confound_logits,  # 梯度反转之后的confound输出的回归结果
-            #
-            # # "counterfactual_logits": counterfactual_logits,  # 进行干预（z_g或者z_c交换）之后得到的回归结果
-            #
-            # "original_features": features,  # 原始特征，用于和重构特征进行比较
-            # "disease_features": z_g_pooled,    #病理特征z_g本身，没有经过池化
-            # "confound_features": z_c_pooled,  # 同上
-            # "recon_features": recon_features,   #重建得到的特征
-
-            # "shuffle_idx": shuffle_idx,  # 将索引返回
+            'bmi_pred': bmi_pred,           # BMI预测（GRL）
+            'age_pred': age_pred,           # 年龄预测（GRL）
         }
 
         return out
@@ -396,66 +339,3 @@ class CounterfactualCausalModeling(nn.Module):
 
 
 
-
-#
-# # === Usage Example === #
-
-
-
-
-
-#     # Model configuration
-#     model = CounterfactualCausalModeling(
-#         input_dim=512,
-#         hidden_dim=256,
-#         z_dim=128,
-#         counterfactual_strategy='vae_sampling',
-#         use_vae_generator=True,
-#         use_disentanglement_loss=False
-#     )
-#
-#     # Loss function
-#     criterion = CounterfactualLoss(
-#         lambda_consistency=0.5,
-#         lambda_vae=0.1,
-#         lambda_disentangle=0.2
-#     )
-#
-#     # Dummy data
-#     batch_size, seq_len, num_joints, feat_dim = 20, 243, 17, 512
-#     inputs = torch.randn(batch_size, seq_len, num_joints, feat_dim)
-#     labels = torch.randn(batch_size)  # Parkinson's gait scores
-#     disease_labels = torch.randint(0, 2, (batch_size,))  # 0=Normal, 1=PD
-#
-#     # Training
-#     model.train()
-#     output = model(inputs, disease_labels)
-#     losses = criterion(output, labels)
-#
-#     print("=== Training Results ===")
-#     print("Losses:", {k: f"{v.item():.4f}" for k, v in losses.items()})
-#
-#     # Counterfactual Inference
-#     model.eval()
-#     cf_disease = model.predict_counterfactual(inputs, intervention="vae_sampling")
-#
-#     print("\n=== Counterfactual Predictions ===")
-#     print(f"Original scores: {output['factual_pred'].detach()}")
-#     print(f"If VAE sampled: {cf_disease}")
-# #
-
-
-
-# counterfactual_logits = None
-        # shuffle_idx=None
-        #
-        # if labels is not None:
-        #     B = z_c_pooled.shape[0]
-        #     shuffle_idx = torch.randperm(B).to(labels.device)
-        #
-        #     # 保持 z_g 不变，交换 confound 特征
-        #     z_c_swapped = z_c_pooled[shuffle_idx]
-        #     z_cf = torch.cat([z_g_pooled, z_c_swapped], dim=-1)
-        #
-        #     # 用新的 head（如果只想看 z_g，可以直接用 z_g；如果希望利用 z_c，最好用 concat）
-        #     counterfactual_logits = self.regressor(z_g_pooled)  # 这里保持不变，关键是 loss 写法

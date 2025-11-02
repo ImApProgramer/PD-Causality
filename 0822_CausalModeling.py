@@ -78,7 +78,7 @@ def final_test(model, test_loader, params):
             x, y = x.to(device), y.to(device).long()
 
             # 使用您的模型前向传播
-            outputs = model(x)
+            outputs = model(x, grl_lambda=0.0)
             logits = outputs["logits"]  # [B, K-1]
 
             # CORAL预测逻辑
@@ -141,7 +141,7 @@ def validate_model(model, val_loader, device, num_classes):
         for x, y, video_idx, metadata in val_loader:
             x, y = x.to(device), y.to(device).long()
 
-            outputs = model(x)
+            outputs = model(x, grl_lambda=0.0)
             logits = outputs["logits"]
 
             # 计算损失
@@ -248,29 +248,77 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     # Stage 1: 基础模型训练
     # -------------------
     print(f"\n--- Starting Stage 1: Training base model for {stage1_epochs} epochs ---")
+
+    # GRL相关参数
+    max_grl_lambda = params.get('max_grl_lambda', 1.0)  # GRL最大强度
+    grl_warmup_epochs = params.get('grl_warmup_epochs', 10)  # GRL热身轮数
+    grl_loss_weight = params.get('grl_loss_weight', 0.1)  # GRL损失权重
+
     for epoch in range(stage1_epochs):
         model.train()
         train_loss = AverageMeter()
+
+        # 计算当前GRL参数
+        if epoch < grl_warmup_epochs:
+            current_grl_lambda = max_grl_lambda * (epoch / grl_warmup_epochs)  # 线性增加
+        else:
+            current_grl_lambda = max_grl_lambda  # 达到最大后稳定
+
+        current_grl_weight = grl_loss_weight * current_grl_lambda  # 综合权重
+
 
         loop = tqdm(train_loader, desc=f'Stage1 Epoch {epoch + 1}/{stage1_epochs}', unit="batch")
 
         for x, y, video_idx, metadata in loop:
             x, y = x.to(device), y.to(device).long()
+
+            if len(metadata) > 0:
+                # metadata 的形状应该是 [batch_size, 5] 对应5种元数据
+                bmi_labels = metadata[:, METADATA_MAP['bmi']].to(device).float()  # [B]
+                age_labels = metadata[:, METADATA_MAP['age']].to(device).float()  # [B]
+            else:
+                bmi_labels = torch.zeros(x.size(0)).to(device)
+                age_labels = torch.zeros(x.size(0)).to(device)
+
             optimizer.zero_grad()
 
-            outputs = model(x)
-            loss = coral_loss(outputs["logits"], y, num_classes)
+            outputs = model(x,grl_lambda=current_grl_lambda)
 
-            loss.backward()
+            main_loss = coral_loss(outputs["logits"], y, num_classes)
+
+            # ===监控训练准确率 ===
+            with torch.no_grad():
+                probs = torch.sigmoid(outputs["logits"])
+                train_preds = (probs > 0.5).sum(dim=1)
+                train_acc = (train_preds == y).float().mean()
+
+            # # 只有当GRL lambda > 0时才计算GRL损失
+            # if current_grl_lambda > 0:
+            #     bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
+            #     age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
+            #     grl_loss = bmi_loss + age_loss
+            # else:
+            #     grl_loss = torch.tensor(0.0).to(device)
+
+            total_loss = main_loss #+ current_grl_weight * grl_loss
+            total_loss.backward()
+
+
             optimizer.step()
-            train_loss.update(loss.item(), x.size(0))
-            loop.set_postfix(loss=train_loss.avg)
+            train_loss.update(total_loss.item(), x.size(0))
+
+            loop.set_postfix({
+                'total_loss': f'{train_loss.avg:.4f}',
+                'main_loss': f'{main_loss.item():.4f}',
+                # 'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
+            })
 
         scheduler.step()
 
         val_metrics = validate_model(model, val_loader, device, num_classes)
         print(f"Stage 1 - Epoch {epoch + 1} | "
               f"Train Loss: {train_loss.avg:.4f} | "
+              f"Train Acc: {train_acc.item():.4f} | "  
               f"Val Acc: {val_metrics['acc']:.4f} | "
               f"Val F1: {val_metrics['f1']:.4f}")
 
