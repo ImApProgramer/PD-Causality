@@ -292,15 +292,15 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 train_preds = (probs > 0.5).sum(dim=1)
                 train_acc = (train_preds == y).float().mean()
 
-            # # 只有当GRL lambda > 0时才计算GRL损失
-            # if current_grl_lambda > 0:
-            #     bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
-            #     age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
-            #     grl_loss = bmi_loss + age_loss
-            # else:
-            #     grl_loss = torch.tensor(0.0).to(device)
+            # 只有当GRL lambda > 0时才计算GRL损失
+            if current_grl_lambda > 0:
+                bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
+                age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
+                grl_loss = bmi_loss + age_loss
+            else:
+                grl_loss = torch.tensor(0.0).to(device)
 
-            total_loss = main_loss #+ current_grl_weight * grl_loss
+            total_loss = main_loss + current_grl_weight * grl_loss
             total_loss.backward()
 
 
@@ -310,7 +310,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             loop.set_postfix({
                 'total_loss': f'{train_loss.avg:.4f}',
                 'main_loss': f'{main_loss.item():.4f}',
-                # 'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
+                'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
             })
 
         scheduler.step()
@@ -341,176 +341,6 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 f"[EARLY STOPPING] Stop training at epoch {epoch + 1 } | best val_f1={best_val_f1:.4f}")
             break
 
-
-
-    # # --- 预填充 Memory Bank ---
-    # print("\n--- Pre-filling Zc Memory Bank with initial features ---")
-    # model.eval()
-    # with torch.no_grad():
-    #     for x_init, y_init, video_idx_init, _ in train_loader:
-    #         x_init, y_init = x_init.to(device), y_init.to(device).long()
-    #         video_idx_init = video_idx_init.to(device).long()
-    #
-    #     if patience_counter >= patience:
-    #         print(
-    #             f"[EARLY STOPPING] Stop training at epoch {epoch + 1 + stage1_epochs} | best val_f1={best_val_f1:.4f}")
-    #         break
-
-
-    # # --- 预填充 Memory Bank ---
-    # print("\n--- Pre-filling Zc Memory Bank with initial features ---")
-    # model.eval()
-    # with torch.no_grad():
-    #     for x_init, y_init, video_idx_init, _ in train_loader:
-    #         x_init, y_init = x_init.to(device), y_init.to(device).long()
-    #         video_idx_init = video_idx_init.to(device).long()
-    #
-    #         outputs_init = model(x_init)
-    #         zc_pooled_init = outputs_init["confound_features"]
-    #         zc_norm_init = F.normalize(zc_pooled_init, dim=1)
-    #
-    #         # 更新 Memory Bank 的特征和 ID 映射
-    #         memory_bank_zc.update(zc_norm_init, y_init, video_idx_init)
-    #
-    #         if memory_bank_zc.filled_count >= N_train_samples:
-    #             break
-    # print(f"--- Memory Bank pre-filled with {memory_bank_zc.filled_count} samples. ---")
-
-    # -------------------
-    # Stage 2: 因果解耦训练
-    # -------------------
-    # print(f"\n--- Starting Stage 2: Causal disentanglement training ---")
-    # stage2_epochs = epochs - stage1_epochs
-    # loop = tqdm(range(stage2_epochs), desc=f'Stage2 Training (fold{fold})', unit="epoch")
-    #
-    # for epoch in loop:
-    #     model.train()
-    #     train_loss = AverageMeter()
-        # train_acc = AverageMeter()
-        #
-        # all_preds = []
-        # all_labels = []
-        #
-        # batch_loop = tqdm(train_loader, desc=f'Stage2 Epoch {epoch + 1}/{stage2_epochs}', leave=False)
-        #
-        # for x, y, video_idx, metadata in batch_loop:
-        #     x, y = x.to(device), y.to(device).long()
-        #
-        #     video_idx = video_idx.to(device).long()
-        #
-        #     metadata = metadata.to(device)
-        #
-        #     optimizer.zero_grad()
-        #
-        #     # 传递标签给 forward 方法，用于反事实损失计算
-        #     outputs = model(x, labels=y,metadata=metadata)
-        #     logits = outputs["logits"]
-        #
-        #     # --- 1. 获取 Zc 特征 ---
-        #     zc_pooled = outputs["confound_features"]
-        #     # 对当前 Batch 的 Zc 特征进行归一化
-        #     zc_norm = F.normalize(zc_pooled, dim=1)
-        #
-        #     # --- 2. L_CT 损失计算 ---
-        #     # 挖掘硬样本
-        #     zc_p_hard, zc_n_special = memory_bank_zc.hard_sample_mining(
-        #         zc_norm, y, k_p=k_p, k_n=k_n
-        #     )
-        #
-        #     # L_CT 损失： Sim(A, N_special) - Sim(A, P_hard) + alpha'
-        #     sim_an = torch.sum(zc_norm * zc_n_special, dim=1)
-        #     sim_ap = torch.sum(zc_norm * zc_p_hard, dim=1)
-        #
-        #     loss_ct = lambd4 * torch.mean(
-        #         torch.relu(sim_an - sim_ap + alpha_ct)
-        #     )
-        #
-        #     # --- 3. Memory Bank 动量更新 ---
-        #     # 使用 detach() 确保梯度不流向 Memory Bank 的特征
-        #     memory_bank_zc.update(zc_norm.detach(), y, video_idx)
-        #
-        #     main_loss = coral_loss(logits, y, num_classes)
-        #
-        #     # 计算所有损失项
-        #     # GRL对应的confound损失
-        #     confound_loss = lambd1 * coral_loss(outputs["confound_logits"], y, num_classes)
-        #
-        #
-        #
-        #     # 重构对应的重构损失
-        #     recon_loss = lambd2 * F.mse_loss(
-        #         outputs["recon_features"].mean(dim=(1, 2)),
-        #         outputs["original_features"].mean(dim=(1, 2))
-        #     )
-        #     # 4.反事实干预对应的损失
-        #     # counterfactual_loss = 0
-        #     # if outputs["counterfactual_logits"] is not None:
-        #     #     shuffle_idx = outputs["shuffle_idx"]    # the shuffled indexes
-        #     #     y_swapped = y[shuffle_idx]              # the label of it
-        #     #     counterfactual_loss = lambd3 * F.mse_loss(outputs["counterfactual_logits"], y_swapped)
-        #
-        #     # counterfactual_loss = 0.0
-        #     #
-        #     # if outputs["counterfactual_logits"] is not None:
-        #     #     shuffle_idx = outputs["shuffle_idx"]
-        #     #     y_swapped = y[shuffle_idx]
-        #     #     counterfactual_loss = lambd3 * coral_loss(outputs["counterfactual_logits"], y_swapped, num_classes)
-        #
-        #     loss = main_loss  + recon_loss + confound_loss + loss_ct #+ counterfactual_loss
-        #
-        #     loss.backward()
-        #     optimizer.step()
-        #
-        #     train_loss.update(loss.item(), x.size(0))
-        #
-        #     with torch.no_grad():
-        #         probs = torch.sigmoid(logits)
-        #         preds = (probs > 0.5).sum(dim=1)
-        #         batch_acc = (preds == y).float().mean().item()
-        #         train_acc.update(batch_acc, x.size(0))
-        #         all_preds.extend(preds.cpu().numpy())
-        #         all_labels.extend(y.cpu().numpy())
-        #
-        #     batch_loop.set_postfix(
-        #         Total=train_loss.avg,
-        #         Main=main_loss.item(),
-        #         Recon=recon_loss.item(),
-        #         Conf=confound_loss.item(),
-        #         CT=loss_ct.item()  # 新增 CT 损失显示
-        #     )
-        #
-        # scheduler.step()
-        #
-        # all_preds = np.array(all_preds)
-        # all_labels = np.array(all_labels)
-        # train_f1_score = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
-        #
-        # val_metrics = validate_model(model, val_loader, device, num_classes)
-        #
-        # print(f"Epoch {epoch + 1 + stage1_epochs} | "
-        #       f"Train Loss: {train_loss.avg:.4f} | "
-        #       f"Train Acc: {train_acc.avg:.4f} | "
-        #       f"Train F1: {train_f1_score:.4f} | "
-        #       f"Val Acc: {val_metrics['acc']:.4f} | "
-        #       f"Val F1: {val_metrics['f1']:.4f}")
-        #
-        # val_f1_score = val_metrics['f1']
-        # if val_f1_score > best_val_f1:
-        #     best_val_f1 = val_f1_score
-        #     patience_counter = 0
-        #     save_checkpoint(checkpoint_root_path, epoch + 1 + stage1_epochs, optimizer.param_groups[0]['lr'],
-        #                     optimizer, model,
-        #                     best_val_f1, fold, latest=False)
-        #     print(
-        #         f"[INFO] Best checkpoint saved at epoch {epoch + 1 + stage1_epochs} with val_f1_score={val_f1_score:.4f}")
-        # else:
-        #     patience_counter += 1
-        #     print(f"[INFO] No improvement. patience_counter = {patience_counter}/{patience}")
-        #
-        # if patience_counter >= patience:
-        #     print(
-        #         f"[EARLY STOPPING] Stop training at epoch {epoch + 1 + stage1_epochs} | best val_f1={best_val_f1:.4f}")
-        #     break
 
 
     lr_backbone = optimizer.param_groups[0]['lr']
