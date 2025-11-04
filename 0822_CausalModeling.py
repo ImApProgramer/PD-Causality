@@ -17,6 +17,8 @@ from tqdm import tqdm
 from test import process_reports,save_and_load_results
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR
+from sklearn.metrics import classification_report, confusion_matrix
+
 
 from configs import generate_config_motionagformer
 from data.augmentations import RandomNoise, RandomRotation, MirrorReflection, axis_mask
@@ -45,7 +47,42 @@ sys.path.insert(0, this_path + "/../")
 
 _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
+#
+# def log_results(rep, confusion, rep_name, conf_name, out_p):
+#     print(rep)
+#     fig, ax = plt.subplots(figsize=(10, 8))
+#     sns.heatmap(confusion, annot=True, ax=ax, cmap="Blues", fmt='g', annot_kws={"size": 26})
+#     ax.set_xlabel('Predicted labels', fontsize=28)
+#     ax.set_ylabel('True labels', fontsize=28)
+#     ax.set_title('Confusion Matrix', fontsize=30)
+#     ax.xaxis.set_ticklabels(['class 0', 'class 1', 'class 2'], fontsize=22)  # Modify class names as needed
+#     ax.yaxis.set_ticklabels(['class 0', 'class 1', 'class 2'], fontsize=22)
+#     # Save the figure
+#     plt.savefig(os.path.join(out_p, conf_name))
+#     plt.close(fig)
+#     with open(os.path.join(out_p, rep_name), "w") as text_file:
+#         text_file.write(rep)
+#
+#     artifact = wandb.Artifact(f'confusion_matrices', type='image-results')
+#     artifact.add_file(os.path.join(out_p, conf_name))
+#     # wandb.log_artifact(artifact)
+#
+#     artifact = wandb.Artifact('reports', type='txtfile-results')
+#     artifact.add_file(os.path.join(out_p, rep_name))
+#     # wandb.log_artifact(artifact)
+#
+# def process_reports(outputs_best, outputs_last, targets, states, output_dir):
+#     # Process reports for 'best' and 'last' data
+#     for prefix, outputs in [('best', outputs_best), ('last', outputs_last)]:
+#         print(f"=========={prefix.upper()} REPORTS============")
+#         # Full dataset metrics
+#         report_final = classification_report(targets, outputs)          #总的结果（不区分ON/OFF）
+#         confusion_final = confusion_matrix(targets, outputs)
+#         log_results(report_final, confusion_final, f'{prefix}_report_allfolds.txt', f'{prefix}_confusion_matrix_allfolds.png', output_dir)
+#
+#         # 'ON' and 'OFF' group metrics
+#         # for phase in ['ON', 'OFF']:
+#         #     calculate_metrics(outputs, targets, states, phase, prefix, output_dir)
 
 
 
@@ -295,8 +332,8 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             # 只有当GRL lambda > 0时才计算GRL损失
             if current_grl_lambda > 0:
                 bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
-                age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
-                grl_loss = bmi_loss + age_loss
+                # age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
+                grl_loss = bmi_loss
             else:
                 grl_loss = torch.tensor(0.0).to(device)
 
