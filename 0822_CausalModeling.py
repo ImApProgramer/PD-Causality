@@ -276,10 +276,10 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             # 只有当GRL lambda > 0时才计算GRL损失
             if current_grl_lambda > 0:
-                # bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
-                age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
+                bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
+                # age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
                 # grl_loss = bmi_loss + age_loss
-                grl_loss = age_loss
+                grl_loss = bmi_loss
             else:
                 grl_loss = torch.tensor(0.0).to(device)
 
