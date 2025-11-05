@@ -17,8 +17,6 @@ from tqdm import tqdm
 from test import process_reports,save_and_load_results
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR
-from sklearn.metrics import classification_report, confusion_matrix
-
 
 from configs import generate_config_motionagformer
 from data.augmentations import RandomNoise, RandomRotation, MirrorReflection, axis_mask
@@ -47,42 +45,7 @@ sys.path.insert(0, this_path + "/../")
 
 _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-#
-# def log_results(rep, confusion, rep_name, conf_name, out_p):
-#     print(rep)
-#     fig, ax = plt.subplots(figsize=(10, 8))
-#     sns.heatmap(confusion, annot=True, ax=ax, cmap="Blues", fmt='g', annot_kws={"size": 26})
-#     ax.set_xlabel('Predicted labels', fontsize=28)
-#     ax.set_ylabel('True labels', fontsize=28)
-#     ax.set_title('Confusion Matrix', fontsize=30)
-#     ax.xaxis.set_ticklabels(['class 0', 'class 1', 'class 2'], fontsize=22)  # Modify class names as needed
-#     ax.yaxis.set_ticklabels(['class 0', 'class 1', 'class 2'], fontsize=22)
-#     # Save the figure
-#     plt.savefig(os.path.join(out_p, conf_name))
-#     plt.close(fig)
-#     with open(os.path.join(out_p, rep_name), "w") as text_file:
-#         text_file.write(rep)
-#
-#     artifact = wandb.Artifact(f'confusion_matrices', type='image-results')
-#     artifact.add_file(os.path.join(out_p, conf_name))
-#     # wandb.log_artifact(artifact)
-#
-#     artifact = wandb.Artifact('reports', type='txtfile-results')
-#     artifact.add_file(os.path.join(out_p, rep_name))
-#     # wandb.log_artifact(artifact)
-#
-# def process_reports(outputs_best, outputs_last, targets, states, output_dir):
-#     # Process reports for 'best' and 'last' data
-#     for prefix, outputs in [('best', outputs_best), ('last', outputs_last)]:
-#         print(f"=========={prefix.upper()} REPORTS============")
-#         # Full dataset metrics
-#         report_final = classification_report(targets, outputs)          #总的结果（不区分ON/OFF）
-#         confusion_final = confusion_matrix(targets, outputs)
-#         log_results(report_final, confusion_final, f'{prefix}_report_allfolds.txt', f'{prefix}_confusion_matrix_allfolds.png', output_dir)
-#
-#         # 'ON' and 'OFF' group metrics
-#         # for phase in ['ON', 'OFF']:
-#         #     calculate_metrics(outputs, targets, states, phase, prefix, output_dir)
+
 
 
 
@@ -254,16 +217,6 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     stage1_epochs = 20  # 阶段一：只训练主分类任务
 
-    lambd1=0.01
-    lambd2=0.03
-    lambd3=0.05
-
-    # 新增 L_CT 损失的超参数和 Memory Bank 初始化
-    # ----------------------------------------------------
-    lambd4 = params.get('lambd4', 0.05)  # L_CT 损失权重 (λ2)
-    alpha_ct = params.get('alpha_ct', 0.1)  # L_CT 损失的 margin (α')
-    k_p = params.get('k_p', 5)  # P_hard 采样的数量 K_P
-    k_n = params.get('k_n', 5)  # N_special 采样的数量 K_N
 
     # --- 关键：获取训练集总样本数 ---
     N_train_samples = len(train_loader.dataset)
@@ -271,14 +224,6 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     # --- 获取设备信息 ---
     device = next(model.parameters()).device
-
-    # 初始化 Zc Memory Bank
-    memory_bank_zc = MemoryBank_Zc(
-        total_samples=N_train_samples,
-        z_dim=model.z_dim,
-        momentum=0.999,  # MoCo 推荐值
-        device=device
-    )
 
 
     # -------------------
@@ -331,9 +276,10 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             # 只有当GRL lambda > 0时才计算GRL损失
             if current_grl_lambda > 0:
-                bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
-                # age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
-                grl_loss = bmi_loss
+                # bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
+                age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
+                # grl_loss = bmi_loss + age_loss
+                grl_loss = age_loss
             else:
                 grl_loss = torch.tensor(0.0).to(device)
 
@@ -377,7 +323,6 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             print(
                 f"[EARLY STOPPING] Stop training at epoch {epoch + 1 } | best val_f1={best_val_f1:.4f}")
             break
-
 
 
     lr_backbone = optimizer.param_groups[0]['lr']
