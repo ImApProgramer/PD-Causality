@@ -332,6 +332,12 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
 
 
+def initialize_wandb(params):
+    wandb.init(name=params['wandb_name'], project='MotionEncoderEvaluator_PD', settings=wandb.Settings(start_method='fork'))
+    installed_packages = {d.project_name: d.version for d in pkg_resources.working_set}
+    wandb.config.update(params)
+    wandb.config.update({'installed_packages': installed_packages})
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--backbone', type=str, default='motionbert', help='model name ( poseformer, ''motionbert )')
@@ -539,7 +545,7 @@ if __name__ == "__main__":
         params['model_prefix'] = params['model_prefix']
 
 
-
+    initialize_wandb(params)
     splits = []
 
 
