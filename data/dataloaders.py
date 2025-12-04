@@ -136,9 +136,34 @@ class DataPreprocessor(ABC):
 
             class_participants = {}
             for participant in participant_ID_cloned:
-                participant_labels = [labels_dict[key] for key in labels_dict if key.startswith(participant + "_on") or key.startswith(participant + "_off")]
-                if participant_labels:
-                    class_participants[participant] = participant_labels[0]  # Use the first label as the class
+                # --- 确定性类别标签查找逻辑 ---
+                selected_label = None
+
+                # 1. 优先级：查找 OFF 状态的标签
+                off_key_prefix = participant + "_off"
+                # 遍历 labels_dict 的所有键，找到以 off_key_prefix 开头的键
+                for key, label in labels_dict.items():
+                    if key.startswith(off_key_prefix):
+                        selected_label = label
+                        break  # 找到第一个 OFF 标签即停止
+
+                # 2. 如果 OFF 状态标签未找到，则查找 ON 状态的标签
+                if selected_label is None:
+                    on_key_prefix = participant + "_on"
+                    # 遍历 labels_dict 的所有键，找到以 on_key_prefix 开头的键
+                    for key, label in labels_dict.items():
+                        if key.startswith(on_key_prefix):
+                            selected_label = label
+                            break  # 找到第一个 ON 标签即停止
+
+                # 3. 如果找到了受试者标签，将其作为该受试者的类别
+                if selected_label is not None:
+                    class_participants[participant] = selected_label
+
+                # #下面是原来的不稳定逻辑
+                # participant_labels = [labels_dict[key] for key in labels_dict if key.startswith(participant + "_on") or key.startswith(participant + "_off")]
+                # if participant_labels:
+                #     class_participants[participant] = participant_labels[0]  # Use the first label as the class
 
             if not val_folds_exists:
                 val_subs = []

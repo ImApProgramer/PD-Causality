@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="dfcb0ed4-6225-46c9-8b42-e4867828b84b" name="hby">
+        <fileTransfer rootFolder="/root" accessType="SFTP" host="127.0.0.1" port="1400" sshConfigId="5c7a2b07-2ea3-4af8-b722-e939801f869c" sshConfig="root@127.0.0.1:1400 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="fc775e5b-7b34-4b7e-8fa1-7ddddc173793" name="dell">
+        <fileTransfer rootFolder="/root" accessType="SFTP" host="127.0.0.1" port="11113" sshConfigId="76d014e4-e4df-4ad9-90cb-2147b4e18bb4" sshConfig="root@127.0.0.1:11113 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="959132d3-5de5-4ad4-9202-9383ebb4ea55" name="lpz">
+        <fileTransfer rootFolder="/root" accessType="SFTP" host="127.0.0.1" port="7788" sshConfigId="0ce43a06-cc68-4e1d-8673-ab4186558ffd" sshConfig="root@127.0.0.1:7788 password">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
