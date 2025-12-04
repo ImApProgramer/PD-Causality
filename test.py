@@ -103,7 +103,7 @@ def configure_params_for_best_model(params, backbone_name):             #TODO:[G
     elif backbone_name == 'motionagformer':
         best_params = {
             "lr": 5e-05,  # 稍微加快收敛速度，但不过冲
-            "num_epochs": 30,  # 多给点epoch，让增强样本有机会训练到
+            "num_epochs": 20,  # 多给点epoch，让增强样本有机会训练到
             "num_hidden_layers": 2,
             "layer_sizes": [128, 32, 8, 3],  # 降低模型容量，减少过拟合
             "optimizer": 'AdamW',  # 对小样本泛化稳定
