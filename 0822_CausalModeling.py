@@ -32,6 +32,8 @@ from torchvision import transforms
 import torch
 from model.motionagformer.MotionAGFormer import MotionAGFormer
 from  model.CausalModeling_counterfactual import *
+from learning.losses import *
+
 
 _MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]          #目前看来只有encoder-decoder中用到了它
 
@@ -236,6 +238,18 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     grl_warmup_epochs = params.get('grl_warmup_epochs', 10)  # GRL热身轮数
     grl_loss_weight = params.get('grl_loss_weight', 0.1)  # GRL损失权重
 
+    # 1. 初始化 (在 Loop 外)
+    memory_bank = OrdinalClassBalancedMemory(num_classes=3, feat_dim=128, device=device)
+    # Loss 包含 memory_bank 引用
+    ciml_criterion = MemoryCausalOrdinalLoss(
+        margin_base=0.1,
+        alpha=0.1,
+        topk=5,
+        memory_bank=memory_bank
+    ).to(device)
+
+    lambda_ciml = 0.1  # 开始设小一点
+
     for epoch in range(stage1_epochs):
         model.train()
         train_loss = AverageMeter()
@@ -266,6 +280,10 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             outputs = model(x,grl_lambda=current_grl_lambda)
 
+            # 度量学习 Loss (传入 epoch 以启用动态策略)
+            # outputs['features'] 已经在 forward 里做过 F.normalize 了，直接传
+            loss_metric = ciml_criterion(outputs['features'], y, epoch=epoch)
+
             main_loss = coral_loss(outputs["logits"], y, num_classes)
 
             # ===监控训练准确率 ===
@@ -283,7 +301,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             else:
                 grl_loss = torch.tensor(0.0).to(device)
 
-            total_loss = main_loss + current_grl_weight * grl_loss
+
+            ciml_loss=(lambda_ciml * loss_metric)
+            total_loss = main_loss + current_grl_weight * grl_loss+ciml_loss
             total_loss.backward()
 
 
@@ -293,6 +313,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             loop.set_postfix({
                 'total_loss': f'{train_loss.avg:.4f}',
                 'main_loss': f'{main_loss.item():.4f}',
+                'ciml_loss': f'{ciml_loss.item():.4f}',
                 'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
             })
 

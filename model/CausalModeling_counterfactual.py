@@ -256,29 +256,6 @@ class CounterfactualCausalModeling(nn.Module):
         self.input_dim = input_dim
         self.z_dim = z_dim
 
-
-
-        # === Shared Regression Head === #
-        # self.regressor = RegressionHead(
-        #     input_dim=z_dim * 2,  # disease + confound features
-        #     hidden_dim=256,
-        #     dropout=0.2
-        # )
-
-        # self.regressor = OrdinalHead(
-        #     input_dim=z_dim,  # 而不是 z_dim*2
-        #     hidden_dims=256,
-        #     num_classes=3,
-        #     dropout=0.2
-        # )
-
-        # self.regressor = LinearClassifierHead(
-        #     input_dim=z_dim,
-        #     hidden_dims=256,
-        #     num_classes=3,  # 直接输出 num_classes 个类别
-        #     dropout=0.2
-        # )
-
         self.regressor = OrdinalHead(       #事实回归头
             input_dim=input_dim,  # 而不是 z_dim*2
             hidden_dim=256,
@@ -286,6 +263,12 @@ class CounterfactualCausalModeling(nn.Module):
             dropout=0.2
         )
 
+        self.metric_projector = nn.Sequential(
+            nn.Linear(input_dim, input_dim),
+            nn.BatchNorm1d(input_dim),
+            nn.ReLU(),
+            nn.Linear(input_dim, z_dim)
+        )
 
         # 主要使用回归头 - 为GRL提供丰富梯度
         self.bmi_regressor = nn.Linear(input_dim, 1)
@@ -314,6 +297,9 @@ class CounterfactualCausalModeling(nn.Module):
         feature_pooled = features.mean(dim=(1,2))
         logits= self.regressor(feature_pooled)
 
+        metric_feats = self.metric_projector(feature_pooled)
+        metric_feats = F.normalize(metric_feats, p=2, dim=1)
+
         # === GRL分支 ===
         # 应用梯度反转
         grl_features = grad_reverse(feature_pooled, grl_lambda)  # [B, C]
@@ -329,6 +315,7 @@ class CounterfactualCausalModeling(nn.Module):
 
         out = {
             "logits": logits,       #z_g经过池化后输出的回归结果
+            "features": metric_feats,  # [新增] 用于 Causal Metric Loss (已归一化)
             'bmi_pred': bmi_pred,           # BMI预测（GRL）
             'age_pred': age_pred,           # 年龄预测（GRL）
         }
