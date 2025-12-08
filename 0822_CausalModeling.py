@@ -303,7 +303,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
 
             ciml_loss=(lambda_ciml * loss_metric)
-            total_loss = main_loss + current_grl_weight * grl_loss+ciml_loss
+            total_loss = main_loss +ciml_loss
             total_loss.backward()
 
 

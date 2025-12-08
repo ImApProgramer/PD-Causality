@@ -32,7 +32,7 @@ class OrdinalClassBalancedMemory(nn.Module):
         labels: [B]
         """
         batch_size = features.size(0)
-        features = features.detach()  # 极其重要！断开梯度
+        features = features.detach()  # 断开梯度
 
         for c in range(self.num_classes):
             # 选出当前 batch 中属于类别 c 的样本
