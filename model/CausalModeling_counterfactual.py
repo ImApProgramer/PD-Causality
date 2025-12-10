@@ -263,6 +263,7 @@ class CounterfactualCausalModeling(nn.Module):
             dropout=0.2
         )
 
+        #非线性投影头
         self.metric_projector = nn.Sequential(
             nn.Linear(input_dim, input_dim),
             nn.BatchNorm1d(input_dim),

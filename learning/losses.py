@@ -146,7 +146,7 @@ class MemoryCausalOrdinalLoss(nn.Module):
             mask_pos_mining = mask_pos
 
         # =================================================================
-        # 💰 计算总 Loss (Sum of Both Strategies)
+        #  计算总 Loss (Sum of Both Strategies)
         # =================================================================
 
         loss = torch.tensor(0.0).to(sim_mat.device)
@@ -177,7 +177,7 @@ class MemoryCausalOrdinalLoss(nn.Module):
                     diff = label_diff_mat[i, neg_idx]
                     margin = self.margin_base + self.alpha * diff
                     # Loss = max(0, S_an - S_ap + m)
-                    loss += F.relu(s_an - s_ap + margin)
+                    loss += F.relu(s_an - s_ap + margin)        #三元组损失 InfoNCE
                     valid_triplets += 1
 
             # --- Part B: 反向 Loss (优化混淆正样本) ---

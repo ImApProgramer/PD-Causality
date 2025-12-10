@@ -248,7 +248,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
         memory_bank=memory_bank
     ).to(device)
 
-    lambda_ciml = 0.1  # 开始设小一点
+    lambda_ciml = 0.1  # 开始设小一点，调一下
 
     for epoch in range(stage1_epochs):
         model.train()
@@ -303,7 +303,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
 
             ciml_loss=(lambda_ciml * loss_metric)
-            total_loss = main_loss +ciml_loss
+            total_loss = main_loss +ciml_loss+grl_loss
             total_loss.backward()
 
 
