@@ -263,13 +263,13 @@ class CounterfactualCausalModeling(nn.Module):
             dropout=0.2
         )
 
-        #非线性投影头
-        self.metric_projector = nn.Sequential(
-            nn.Linear(input_dim, input_dim),
-            nn.BatchNorm1d(input_dim),
-            nn.ReLU(),
-            nn.Linear(input_dim, z_dim)
-        )
+        # #非线性投影头
+        # self.metric_projector = nn.Sequential(
+        #     nn.Linear(input_dim, input_dim),
+        #     nn.BatchNorm1d(input_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(input_dim, z_dim)
+        # )
 
         # 主要使用回归头 - 为GRL提供丰富梯度
         self.bmi_regressor = nn.Linear(input_dim, 1)
@@ -298,8 +298,8 @@ class CounterfactualCausalModeling(nn.Module):
         feature_pooled = features.mean(dim=(1,2))
         logits= self.regressor(feature_pooled)
 
-        metric_feats = self.metric_projector(feature_pooled)
-        metric_feats = F.normalize(metric_feats, p=2, dim=1)
+        # metric_feats = self.metric_projector(feature_pooled)
+        metric_feats = F.normalize(feature_pooled, p=2, dim=1)
 
         # === GRL分支 ===
         # 应用梯度反转

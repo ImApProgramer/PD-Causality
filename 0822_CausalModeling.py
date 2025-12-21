@@ -34,6 +34,10 @@ from model.motionagformer.MotionAGFormer import MotionAGFormer
 from  model.CausalModeling_counterfactual import *
 from learning.losses import *
 
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import os
+
 
 _MAJOR_JOINTS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]          #目前看来只有encoder-decoder中用到了它
 
@@ -130,6 +134,57 @@ def final_test(model, test_loader, params):
         final_names.append(video_names[vid])
 
     return final_predictions, final_labels, final_logits, final_states, final_names
+
+
+def plot_tsne_features(model, data_loader, device, epoch, save_root):
+    """
+    提取特征并绘制 t-SNE 图，展示正则化后的特征分布关系
+    """
+    model.eval()
+    all_feats = []
+    all_labels = []
+    
+    # 抽取约 500-1000 个样本进行可视化即可，太多会计算缓慢
+    max_samples = 800 
+    curr_samples = 0
+
+    with torch.no_grad():
+        for x, y, _, _ in data_loader:
+            x, y = x.to(device), y.to(device)
+            # 这里的 'features' 是 Backbone 出来的、被正则项直接约束的特征
+            outputs = model(x)
+            feats = outputs["features"].cpu().numpy()
+            
+            all_feats.append(feats)
+            all_labels.append(y.cpu().numpy())
+            
+            curr_samples += x.size(0)
+            if curr_samples >= max_samples:
+                break
+
+    feats = np.concatenate(all_feats, axis=0)
+    labels = np.concatenate(all_labels, axis=0)
+
+    # 计算 t-SNE
+    tsne = TSNE(n_components=2, random_state=42, init='pca', learning_rate='auto')
+    feats_2d = tsne.fit_transform(feats)
+
+    # 绘图
+    plt.figure(figsize=(10, 8))
+    scatter = plt.scatter(feats_2d[:, 0], feats_2d[:, 1], c=labels, cmap='jet', alpha=0.7, edgecolors='none', s=30)
+    plt.colorbar(scatter, ticks=range(3), label='PD Score (0, 1, 2)')
+    plt.title(f"Backbone Feature Distribution (Regularized) - Epoch {epoch}")
+    
+    # 保存文件
+    save_dir = os.path.join(save_root, "visualizations")
+    if not os.path.exists(save_dir): os.makedirs(save_dir)
+    save_path = os.path.join(save_dir, f"tsne_epoch_{epoch}.png")
+    plt.savefig(save_path)
+    plt.close()
+    
+    # 如果开启了 wandb，直接上传图片
+    # wandb.log({f"Feature_Space_Epoch_{epoch}": wandb.Image(save_path)}, step=epoch)
+    print(f"[VIS] Visualization saved to {save_path}")
 
 def validate_model(model, val_loader, device, num_classes):
     """验证函数"""
@@ -238,6 +293,8 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     grl_warmup_epochs = params.get('grl_warmup_epochs', 10)  # GRL热身轮数
     grl_loss_weight = params.get('grl_loss_weight', 0.1)  # GRL损失权重
 
+    backbone_dim=params.get('dim_rep', 128)
+
     # 1. 初始化 (在 Loop 外)
     memory_bank = OrdinalClassBalancedMemory(num_classes=3, feat_dim=128, device=device)
     # Loss 包含 memory_bank 引用
@@ -302,7 +359,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 grl_loss = torch.tensor(0.0).to(device)
 
 
-            ciml_loss=(lambda_ciml * loss_metric)
+            # ciml_loss=(lambda_ciml * loss_metric)
+            loss_reg = ciml_criterion(outputs['features'], y, epoch=epoch)
+            ciml_loss=(lambda_ciml * loss_reg)
             total_loss = main_loss +ciml_loss+grl_loss
             total_loss.backward()
 
@@ -318,6 +377,14 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             })
 
         scheduler.step()
+
+
+        vis_save_path = os.path.join(path.CAUSAL_OUT_PATH, params['model_prefix'])
+        # 逻辑：初始、正则介入、中间、结束
+        if epoch == 0 or (epoch + 1) == 5 or (epoch + 1) % 10 == 0 or (epoch + 1) == stage1_epochs:
+            print(f"[VIS] Generating t-SNE for Epoch {epoch + 1}...")
+            # 传入 model, val_loader 以及保存路径
+            plot_tsne_features(model, val_loader, device, epoch + 1, vis_save_path)
 
         val_metrics = validate_model(model, val_loader, device, num_classes)
         print(f"Stage 1 - Epoch {epoch + 1} | "

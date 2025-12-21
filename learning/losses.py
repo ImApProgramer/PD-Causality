@@ -9,8 +9,11 @@ class OrdinalClassBalancedMemory(nn.Module):
     维护 0, 1, 2 每个类别固定数量的历史特征，用于挖掘负样本。
     """
 
-    def __init__(self, num_classes=3, feat_dim=128, memory_per_class=256, device='cuda'):
+    def __init__(self, num_classes=3, feat_dim=None, memory_per_class=256, device='cuda'):
         super(OrdinalClassBalancedMemory, self).__init__()
+
+        if feat_dim is None: raise ValueError("feat_dim must be specified!")
+
         self.num_classes = num_classes
         self.memory_per_class = memory_per_class
         self.feat_dim = feat_dim
@@ -95,6 +98,12 @@ class MemoryCausalOrdinalLoss(nn.Module):
         # 1. 获取记忆库全量数据
         mem_feats, mem_labels = self.memory_bank.get_memory()
 
+        # === [DEBUG 代码 START] ===
+        print(f"DEBUG: batch_feats shape: {batch_feats.shape}")
+        print(f"DEBUG: mem_feats shape: {mem_feats.shape}")
+        # === [DEBUG 代码 END] ===
+
+
         # 拼接: [B + M, D]
         all_feats = torch.cat([batch_feats, mem_feats.detach()], dim=0)
         all_labels = torch.cat([batch_labels, mem_labels], dim=0)
@@ -123,10 +132,10 @@ class MemoryCausalOrdinalLoss(nn.Module):
         # 阈值：比最远正样本还要松一点点
         fwd_threshold = min_pos_sim - self.margin_base
 
-        if epoch >= 5:
+        if epoch >= 10:
             mask_neg_mining = mask_neg & (sim_mat > fwd_threshold.unsqueeze(1))
         else:
-            mask_neg_mining = mask_neg
+            mask_neg_mining = torch.zeros_like(mask_neg) # 前期不约束
 
         # =================================================================
         # 反向挖掘
@@ -140,10 +149,10 @@ class MemoryCausalOrdinalLoss(nn.Module):
 
         # 2. 筛选混淆正样本 (Confusing Positives)
         # 条件：是正样本 AND 距离竟然比反向阈值还远
-        if epoch >= 5:
+        if epoch >= 10:
             mask_pos_mining = mask_pos & (sim_mat < rev_threshold.unsqueeze(1))
         else:
-            mask_pos_mining = mask_pos
+            mask_pos_mining = torch.zeros_like(mask_pos)
 
         # =================================================================
         #  计算总 Loss (Sum of Both Strategies)
