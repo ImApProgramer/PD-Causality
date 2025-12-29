@@ -513,17 +513,36 @@ if __name__ == "__main__":
     backbone_name=params['backbone']
     if backbone_name == 'motionagformer':
         best_params = {
-            "lr": 1e-05,
-            "num_epochs": 20,
+            "lr": 5e-05,
+            "num_epochs": 30,
             "num_hidden_layers": 2,
             "layer_sizes": [256, 50, 16, 3],
-            "optimizer": 'RMSprop',
+            "optimizer": 'AdamW',
             "use_weighted_loss": True,
-            "batch_size": 32,
-            "dropout_rate": 0.1,
-            'weight_decay': 0.00057,
+            "batch_size": 16,
+            "dropout_rate": 0.4,
+            'weight_decay': 0.0001,
             'momentum': 0.66
         }
+
+    # if backbone_name == 'motionagformer':
+    #     best_params = {
+    #         "lr": 5e-05,  # 稍微加快收敛速度，但不过冲
+    #         "num_epochs": 30,  # 多给点epoch，让增强样本有机会训练到
+    #         "num_hidden_layers": 2,
+    #         "layer_sizes": [128, 32, 8, 3],  # 降低模型容量，减少过拟合
+    #         "optimizer": 'AdamW',  # 对小样本泛化稳定
+    #         "use_weighted_loss": True,
+    #         "batch_size": 16,  # 较小批量，增加梯度更新频率
+    #         "dropout_rate": 0.4,  # 明显提高Dropout防过拟合
+    #         "weight_decay": 0.001,  # L2正则更强
+    #         "momentum": 0.9,  # 这里即使AdamW不用也可以留着给兼容
+    #         "rotation_prob": 0.5,  # 增强概率提高
+    #         "mirror_prob": 0.5,
+    #         "noise_prob": 0.4,
+    #         "axis_mask_prob": 0.3,
+    #         "rotation_range": (-15, 15)  # 限制旋转幅度，防止过大扰动
+    #     }
     elif backbone_name == 'ctrgcn':
         best_params = {  # ⚠️这些参数是否合理呢？
             "lr": 1e-05,  # 0807调参：似乎有点太大了，从原来的0.1调整到0.001

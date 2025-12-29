@@ -282,6 +282,8 @@ class CounterfactualCausalModeling(nn.Module):
         # === backbone features ===
         features = self.backbone(inputs)  # [B, T, J, C]
 
+        #Motion之外？静态幅度
+
         if len(features.shape)==2 :
             B = features.shape[0]  # batch size
             C = 256  # 特征维度
