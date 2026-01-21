@@ -200,7 +200,7 @@ def orthogonal_loss(z1, z2):
 def train_model(params, class_weights, train_loader, val_loader, model, fold, backbone_name, mode="RUN"):
 
     optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
+        filter(lambda p: p.requires_grad, model.parameters()),  # 此时所有参数都需要梯度
         lr=params.get('lr', 1e-4),
         weight_decay=params.get('weight_decay', 1e-4)
     )
@@ -217,7 +217,10 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     best_val_f1 = 0.0
     patience_counter = 0  # 记录连续多少次没有提升
 
-    stage1_epochs = 20  # 阶段一：只训练主分类任务
+    # [新增] 定义两个阶段的 Epoch
+    total_epochs = params.get("epochs", 20)
+    stage1_epochs = int(total_epochs * 0.7)  # 例如前 70% 轮次练特征
+    stage2_epochs = total_epochs - stage1_epochs  # 后 30% 轮次练回归头
 
 
     # --- 关键：获取训练集总样本数 ---
@@ -245,6 +248,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
         margin_base=0.1,
         alpha=0.1,
         topk=5,
+        temperature=2.0,
         memory_bank=memory_bank
     ).to(device)
 
@@ -253,6 +257,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     for epoch in range(stage1_epochs):
         model.train()
         train_loss = AverageMeter()
+
+        # [修改] 确保全模型解冻
+        model.requires_grad_(True)
 
         # 计算当前GRL参数
         if epoch < grl_warmup_epochs:
@@ -280,11 +287,11 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             outputs = model(x,grl_lambda=current_grl_lambda)
 
-            # 度量学习 Loss (传入 epoch 以启用动态策略)
-            # outputs['features'] 已经在 forward 里做过 F.normalize 了，直接传
-            loss_metric = ciml_criterion(outputs['features'], y, epoch=epoch)
+            # --- 1. RNC Loss (建立序属性) ---
+            loss_rnc = ciml_criterion(outputs['features'], y)
 
-            main_loss = coral_loss(outputs["logits"], y, num_classes)
+
+            #main_loss = coral_loss(outputs["logits"], y, num_classes) #阶段1不学习main_loss，防止回归头干扰特征排序，让特征纯粹地学习排序和去偏
 
             # ===监控训练准确率 ===
             with torch.no_grad():
@@ -302,8 +309,8 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 grl_loss = torch.tensor(0.0).to(device)
 
 
-            ciml_loss=(lambda_ciml * loss_metric)
-            total_loss = main_loss +ciml_loss
+            # ciml_loss=(lambda_ciml * loss_metric)
+            total_loss = loss_rnc+grl_loss_weight*grl_loss
             total_loss.backward()
 
 
@@ -312,44 +319,123 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
             loop.set_postfix({
                 'total_loss': f'{train_loss.avg:.4f}',
-                'main_loss': f'{main_loss.item():.4f}',
-                'ciml_loss': f'{ciml_loss.item():.4f}',
+                # 'main_loss': f'{main_loss.item():.4f}',
+                # 'ciml_loss': f'{ciml_loss.item():.4f}',
+                'ciml_loss': f'{loss_rnc.item():.4f}',
                 'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
             })
 
         scheduler.step()
 
+
+    # ==========================================
+    # [新增] Stage 2: 纯预测训练 (全部冻结)
+    # ==========================================
+    print("--- Stage 2: Frozen Encoder Predictor Training ---")
+
+    # 1. 彻底冻结编码器和 GRL 分支
+    model.requires_grad_(False)
+
+    # 2. 只开启回归头梯度
+    for param in model.regressor.parameters():
+        param.requires_grad = True
+
+    # 3. 重新定义只针对 regressor 的优化器
+    optimizer_s2 = torch.optim.AdamW(model.regressor.parameters(), lr=1e-3)
+
+    # [新增] 定义 scheduler_s2，否则后面调用 step() 会报错
+    scheduler_s2 = StepLR(optimizer_s2, step_size=5, gamma=0.5)
+    for epoch in range(stage2_epochs):
+        current_epoch = stage1_epochs + epoch + 1  # 累计 Epoch 计数
+
+        # 注意：这里虽然 model.train()，但由于 requires_grad=False，Backbone 参数不会变
+        # BN 层会继续更新统计量(Running Stats)，这通常是期望的。
+        # 如果想严格定死 BN，可以设为 model.eval() 但只让 regressor 训练，不过通常 model.train() 没问题。
+        model.train()
+        train_loss = AverageMeter()
+        train_acc_meter = AverageMeter()
+
+        loop = tqdm(train_loader, desc=f'S2 Ep {epoch + 1}/{stage2_epochs}', unit="batch")
+
+        for x, y, video_idx, metadata in loop:
+            x, y = x.to(device), y.to(device).long()
+            optimizer_s2.zero_grad()
+
+            # [调用] 此时 grl_lambda 设为 0，因为特征已定型，不需要 GRL 对抗了
+            outputs = model(x, grl_lambda=0.0)
+
+            # --- 核心：只训练预测结果 ---
+            loss_main = coral_loss(outputs["logits"], y, num_classes)
+
+            loss_main.backward()
+            optimizer_s2.step()
+
+            # 记录指标
+            train_loss.update(loss_main.item(), x.size(0))
+
+            # 计算训练集准确率用于监控
+            with torch.no_grad():
+                probs = torch.sigmoid(outputs["logits"])
+                preds = (probs > 0.5).sum(dim=1)
+                acc = (preds == y).float().mean()
+                train_acc_meter.update(acc.item(), x.size(0))
+
+            loop.set_postfix({'reg_loss': f'{train_loss.avg:.4f}', 'tr_acc': f'{train_acc_meter.avg:.3f}'})
+
+        scheduler_s2.step()
+
+        # =============================================
+        # 验证与保存逻辑 (保留原逻辑的核心部分)
+        # =============================================
         val_metrics = validate_model(model, val_loader, device, num_classes)
-        print(f"Stage 1 - Epoch {epoch + 1} | "
-              f"Train Loss: {train_loss.avg:.4f} | "
-              f"Train Acc: {train_acc.item():.4f} | "  
+
+        current_lr = optimizer_s2.param_groups[0]['lr']
+        print(f"Total Epoch {current_epoch} | "
+              f"S2 Loss: {train_loss.avg:.4f} | "
               f"Val Acc: {val_metrics['acc']:.4f} | "
-              f"Val F1: {val_metrics['f1']:.4f}")
+              f"Val F1: {val_metrics['f1']:.4f} | "
+              f"LR: {current_lr:.1e}")
 
-        val_f1_score=val_metrics['f1']
+        # WandB 日志 (如果启用了)
+        if wandb.run is not None:
+            wandb.log({
+                "train_loss": train_loss.avg,
+                "val_loss": val_metrics['loss'],
+                "val_acc": val_metrics['acc'],
+                "val_f1": val_metrics['f1'],
+                "epoch": current_epoch
+            })
 
+        # --- Checkpoint 保存逻辑 ---
+        val_f1_score = val_metrics['f1']
+
+        # 1. 保存最佳模型 (Best F1)
         if val_f1_score > best_val_f1:
             best_val_f1 = val_f1_score
-            patience_counter = 0
-            save_checkpoint(checkpoint_root_path, epoch + 1 , optimizer.param_groups[0]['lr'],
-                            optimizer, model,
-                            best_val_f1, fold, latest=False)
-            print(
-                f"[INFO] Best checkpoint saved at epoch {epoch + 1 } with val_f1_score={val_f1_score:.4f}")
+            patience_counter = 0  # 重置早停计数
+
+            save_checkpoint(
+                checkpoint_root_path, current_epoch, current_lr,
+                optimizer_s2,  # 注意保存的是当前的优化器
+                model,
+                best_val_f1, fold, latest=False
+            )
+            print(f"[INFO] Best checkpoint saved! Val F1: {best_val_f1:.4f}")
         else:
             patience_counter += 1
-            print(f"[INFO] No improvement. patience_counter = {patience_counter}/{patience}")
+            print(f"[INFO] No improvement. Patience: {patience_counter}/{patience}")
 
+        # 2. 早停逻辑
         if patience_counter >= patience:
-            print(
-                f"[EARLY STOPPING] Stop training at epoch {epoch + 1 } | best val_f1={best_val_f1:.4f}")
+            print(f"[EARLY STOPPING] Stop at S2 epoch {epoch + 1} (Total {current_epoch})")
             break
 
-
-    lr_backbone = optimizer.param_groups[0]['lr']
+        # 训练结束，保存 Latest 模型
     if mode == "RUN":
-        save_checkpoint(checkpoint_root_path, epoch, lr_backbone, optimizer, model, None, fold, latest=True)
+        # 注意：这里保存的 latest 是 Stage 2 结束时的状态
+        save_checkpoint(checkpoint_root_path, total_epochs, 0.0, optimizer_s2, model, best_val_f1, fold, latest=True)
         print(f'[INFO] Latest checkpoint saved at: {checkpoint_root_path}')
+
 
 
 
