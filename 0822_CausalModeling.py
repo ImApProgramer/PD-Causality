@@ -197,226 +197,129 @@ def orthogonal_loss(z1, z2):
     cos_sim = torch.sum(z1 * z2, dim=-1)  # batch-wise inner product
     return (cos_sim ** 2).mean()
 
+
 def train_model(params, class_weights, train_loader, val_loader, model, fold, backbone_name, mode="RUN"):
+    # ================= 1. 初始化与参数提取 =================
+    # 初始化输出目录
+    checkpoint_root_path = os.path.join(path.CAUSAL_OUT_PATH, params['model_prefix'], 'models')
+    if not os.path.exists(checkpoint_root_path): os.makedirs(checkpoint_root_path)
 
-    optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),  # 此时所有参数都需要梯度
-        lr=params.get('lr', 1e-4),
-        weight_decay=params.get('weight_decay', 1e-4)
-    )
-    scheduler = StepLR(optimizer, step_size=params['lr_step_size'], gamma=params['lr_decay'])
-    checkpoint_root_path = os.path.join(path.CAUSAL_OUT_PATH, params['model_prefix'],'models')
-    if not os.path.exists(checkpoint_root_path): os.makedirs(checkpoint_root_path)      #原本的mkdir只能创建单级目录
-
-
+    # 获取设备
+    device = next(model.parameters()).device
     num_classes = params["num_classes"]
-    epochs = params.get("epochs", 20)
+
+    # [参数] 提取权重
+    lambda_rnc = params.get('lambda_rnc', 2.0)  # RNC 正则权重，原来为0.5
+    lambda_grl = params.get('grl_loss_weight', 0.1)  # GRL 正则权重
+
+    # [参数] GRL 调度参数
+    max_grl_lambda = params.get('max_grl_lambda', 1.0)
+    grl_warmup_epochs = params.get('grl_warmup_epochs', 10)
+
+    # [组件] 初始化 Memory Bank 和 RNC Loss (修复：之前漏了定义)
+    # 必须有这个才能算 loss_rnc
+    memory_bank = OrdinalClassBalancedMemory(num_classes=3, feat_dim=128, device=device)
+    ciml_criterion = MemoryCausalOrdinalLoss(temperature=2.0, memory_bank=memory_bank).to(device)
+
+    # [优化器] 统一优化器 (负责全模型)
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=params.get('lr', 1e-4),
+        weight_decay=params.get('weight_decay', 1e-3)   #原来为1e-4
+    )
+    scheduler = StepLR(optimizer, step_size=params.get('lr_step_size', 10), gamma=params.get('lr_decay', 0.5))
+
+    # [循环控制]
+    total_epochs = params.get("epochs", 50) #原为40
     patience = params.get("stopping_tolerance", 10)
 
-    loop = tqdm(range(epochs), desc=f'Training (fold{fold})', unit="epoch")
     best_val_f1 = 0.0
-    patience_counter = 0  # 记录连续多少次没有提升
+    patience_counter = 0
 
-    # [新增] 定义两个阶段的 Epoch
-    total_epochs = params.get("epochs", 20)
-    stage1_epochs = int(total_epochs * 0.7)  # 例如前 70% 轮次练特征
-    stage2_epochs = total_epochs - stage1_epochs  # 后 30% 轮次练回归头
+    print(f"[INFO] Starting Joint Training (Regularization Mode) for {total_epochs} epochs")
+    print(f"[INFO] Weights -> Main: 1.0 | RNC: {lambda_rnc} | GRL: {lambda_grl}")
 
-
-    # --- 关键：获取训练集总样本数 ---
-    N_train_samples = len(train_loader.dataset)
-    print(f"[INFO] Total training samples detected: {N_train_samples}")
-
-    # --- 获取设备信息 ---
-    device = next(model.parameters()).device
-
-
-    # -------------------
-    # Stage 1: 基础模型训练
-    # -------------------
-    print(f"\n--- Starting Stage 1: Training base model for {stage1_epochs} epochs ---")
-
-    # GRL相关参数
-    max_grl_lambda = params.get('max_grl_lambda', 1.0)  # GRL最大强度
-    grl_warmup_epochs = params.get('grl_warmup_epochs', 10)  # GRL热身轮数
-    grl_loss_weight = params.get('grl_loss_weight', 0.1)  # GRL损失权重
-
-    # 1. 初始化 (在 Loop 外)
-    memory_bank = OrdinalClassBalancedMemory(num_classes=3, feat_dim=128, device=device)
-    # Loss 包含 memory_bank 引用
-    ciml_criterion = MemoryCausalOrdinalLoss(
-        margin_base=0.1,
-        alpha=0.1,
-        topk=5,
-        temperature=2.0,
-        memory_bank=memory_bank
-    ).to(device)
-
-    lambda_ciml = 0.1  # 开始设小一点
-
-    for epoch in range(stage1_epochs):
+    # ================= 2. 训练循环 =================
+    for epoch in range(total_epochs):
         model.train()
-        train_loss = AverageMeter()
+        model.requires_grad_(True)  # 确保全模型可训练
 
-        # [修改] 确保全模型解冻
-        model.requires_grad_(True)
+        train_loss_meter = AverageMeter()
 
-        # 计算当前GRL参数
+        # 计算当前 GRL 强度
         if epoch < grl_warmup_epochs:
-            current_grl_lambda = max_grl_lambda * (epoch / grl_warmup_epochs)  # 线性增加
+            current_grl_lambda = max_grl_lambda * (epoch / grl_warmup_epochs)
         else:
-            current_grl_lambda = max_grl_lambda  # 达到最大后稳定
+            current_grl_lambda = max_grl_lambda
 
-        current_grl_weight = grl_loss_weight * current_grl_lambda  # 综合权重
-
-
-        loop = tqdm(train_loader, desc=f'Stage1 Epoch {epoch + 1}/{stage1_epochs}', unit="batch")
+        loop = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{total_epochs}', unit="batch")
 
         for x, y, video_idx, metadata in loop:
             x, y = x.to(device), y.to(device).long()
 
+            # 准备 GRL 标签
             if len(metadata) > 0:
-                # metadata 的形状应该是 [batch_size, 5] 对应5种元数据
-                bmi_labels = metadata[:, METADATA_MAP['bmi']].to(device).float()  # [B]
-                age_labels = metadata[:, METADATA_MAP['age']].to(device).float()  # [B]
+                bmi_labels = metadata[:, METADATA_MAP['bmi']].to(device).float()
             else:
                 bmi_labels = torch.zeros(x.size(0)).to(device)
-                age_labels = torch.zeros(x.size(0)).to(device)
 
             optimizer.zero_grad()
 
-            outputs = model(x,grl_lambda=current_grl_lambda)
+            # --- A. 前向传播 ---
+            outputs = model(x, grl_lambda=current_grl_lambda)
 
-            # --- 1. RNC Loss (建立序属性) ---
-            loss_rnc = ciml_criterion(outputs['features'], y)
-
-
-            #main_loss = coral_loss(outputs["logits"], y, num_classes) #阶段1不学习main_loss，防止回归头干扰特征排序，让特征纯粹地学习排序和去偏
-
-            # ===监控训练准确率 ===
-            with torch.no_grad():
-                probs = torch.sigmoid(outputs["logits"])
-                train_preds = (probs > 0.5).sum(dim=1)
-                train_acc = (train_preds == y).float().mean()
-
-            # 只有当GRL lambda > 0时才计算GRL损失
-            if current_grl_lambda > 0:
-                bmi_loss = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
-                # age_loss = F.mse_loss(outputs["age_pred"].squeeze(), age_labels)
-                # grl_loss = bmi_loss + age_loss
-                grl_loss = bmi_loss
-            else:
-                grl_loss = torch.tensor(0.0).to(device)
-
-
-            # ciml_loss=(lambda_ciml * loss_metric)
-            total_loss = loss_rnc+grl_loss_weight*grl_loss
-            total_loss.backward()
-
-
-            optimizer.step()
-            train_loss.update(total_loss.item(), x.size(0))
-
-            loop.set_postfix({
-                'total_loss': f'{train_loss.avg:.4f}',
-                # 'main_loss': f'{main_loss.item():.4f}',
-                # 'ciml_loss': f'{ciml_loss.item():.4f}',
-                'ciml_loss': f'{loss_rnc.item():.4f}',
-                'grl_loss': f'{grl_loss.item():.4f}' if current_grl_lambda > 0 else '0.0000',
-            })
-
-        scheduler.step()
-
-
-    # ==========================================
-    # [新增] Stage 2: 纯预测训练 (全部冻结)
-    # ==========================================
-    print("--- Stage 2: Frozen Encoder Predictor Training ---")
-
-    # 1. 彻底冻结编码器和 GRL 分支
-    model.requires_grad_(False)
-
-    # 2. 只开启回归头梯度
-    for param in model.regressor.parameters():
-        param.requires_grad = True
-
-    # 3. 重新定义只针对 regressor 的优化器
-    optimizer_s2 = torch.optim.AdamW(model.regressor.parameters(), lr=1e-3)
-
-    # [新增] 定义 scheduler_s2，否则后面调用 step() 会报错
-    scheduler_s2 = StepLR(optimizer_s2, step_size=5, gamma=0.5)
-    for epoch in range(stage2_epochs):
-        current_epoch = stage1_epochs + epoch + 1  # 累计 Epoch 计数
-
-        # 注意：这里虽然 model.train()，但由于 requires_grad=False，Backbone 参数不会变
-        # BN 层会继续更新统计量(Running Stats)，这通常是期望的。
-        # 如果想严格定死 BN，可以设为 model.eval() 但只让 regressor 训练，不过通常 model.train() 没问题。
-        model.train()
-        train_loss = AverageMeter()
-        train_acc_meter = AverageMeter()
-
-        loop = tqdm(train_loader, desc=f'S2 Ep {epoch + 1}/{stage2_epochs}', unit="batch")
-
-        for x, y, video_idx, metadata in loop:
-            x, y = x.to(device), y.to(device).long()
-            optimizer_s2.zero_grad()
-
-            # [调用] 此时 grl_lambda 设为 0，因为特征已定型，不需要 GRL 对抗了
-            outputs = model(x, grl_lambda=0.0)
-
-            # --- 核心：只训练预测结果 ---
+            # --- B. 计算损失 (Joint Training) ---
+            # 1. 主任务损失 (CORAL)
             loss_main = coral_loss(outputs["logits"], y, num_classes)
 
-            loss_main.backward()
-            optimizer_s2.step()
+            # 2. 正则项: RNC (排序约束)
+            loss_rnc = ciml_criterion(outputs['features'], y)
 
-            # 记录指标
-            train_loss.update(loss_main.item(), x.size(0))
+            # 3. 正则项: GRL (去偏约束)
+            if current_grl_lambda > 0:
+                loss_grl_val = F.mse_loss(outputs["bmi_pred"].squeeze(), bmi_labels)
+            else:
+                loss_grl_val = torch.tensor(0.0).to(device)
 
-            # 计算训练集准确率用于监控
-            with torch.no_grad():
-                probs = torch.sigmoid(outputs["logits"])
-                preds = (probs > 0.5).sum(dim=1)
-                acc = (preds == y).float().mean()
-                train_acc_meter.update(acc.item(), x.size(0))
+            # [核心] 加权求和
+            total_loss = loss_main + (lambda_rnc * loss_rnc) + (lambda_grl * loss_grl_val)
 
-            loop.set_postfix({'reg_loss': f'{train_loss.avg:.4f}', 'tr_acc': f'{train_acc_meter.avg:.3f}'})
+            # --- C. 反向传播 ---
+            total_loss.backward()
+            optimizer.step()
 
-        scheduler_s2.step()
-
-        # =============================================
-        # 验证与保存逻辑 (保留原逻辑的核心部分)
-        # =============================================
-        val_metrics = validate_model(model, val_loader, device, num_classes)
-
-        current_lr = optimizer_s2.param_groups[0]['lr']
-        print(f"Total Epoch {current_epoch} | "
-              f"S2 Loss: {train_loss.avg:.4f} | "
-              f"Val Acc: {val_metrics['acc']:.4f} | "
-              f"Val F1: {val_metrics['f1']:.4f} | "
-              f"LR: {current_lr:.1e}")
-
-        # WandB 日志 (如果启用了)
-        if wandb.run is not None:
-            wandb.log({
-                "train_loss": train_loss.avg,
-                "val_loss": val_metrics['loss'],
-                "val_acc": val_metrics['acc'],
-                "val_f1": val_metrics['f1'],
-                "epoch": current_epoch
+            # 记录日志
+            train_loss_meter.update(total_loss.item(), x.size(0))
+            loop.set_postfix({
+                'L_main': f'{loss_main.item():.3f}',
+                'L_rnc': f'{loss_rnc.item():.3f}',
+                'L_grl': f'{loss_grl_val.item():.3f}'
             })
 
-        # --- Checkpoint 保存逻辑 ---
+        # 更新学习率
+        scheduler.step()
+
+        # ================= 3. 验证与保存 =================
+        val_metrics = validate_model(model, val_loader, device, num_classes)
         val_f1_score = val_metrics['f1']
 
-        # 1. 保存最佳模型 (Best F1)
+        # 获取当前学习率 (修复：变量名改为 optimizer)
+        current_lr = optimizer.param_groups[0]['lr']
+
+        print(f"Epoch {epoch + 1} | "
+              f"Train Loss: {train_loss_meter.avg:.4f} | "
+              f"Val Acc: {val_metrics['acc']:.4f} | "
+              f"Val F1: {val_f1_score:.4f} | "
+              f"LR: {current_lr:.1e}")
+
+        # --- Checkpoint 保存逻辑 ---
         if val_f1_score > best_val_f1:
             best_val_f1 = val_f1_score
-            patience_counter = 0  # 重置早停计数
+            patience_counter = 0
 
             save_checkpoint(
-                checkpoint_root_path, current_epoch, current_lr,
-                optimizer_s2,  # 注意保存的是当前的优化器
+                checkpoint_root_path, epoch + 1, current_lr,
+                optimizer,  # 修复：使用统一的 optimizer
                 model,
                 best_val_f1, fold, latest=False
             )
@@ -425,17 +328,15 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             patience_counter += 1
             print(f"[INFO] No improvement. Patience: {patience_counter}/{patience}")
 
-        # 2. 早停逻辑
+        # 早停
         if patience_counter >= patience:
-            print(f"[EARLY STOPPING] Stop at S2 epoch {epoch + 1} (Total {current_epoch})")
+            print(f"[EARLY STOPPING] Stop at epoch {epoch + 1}")
             break
 
-        # 训练结束，保存 Latest 模型
+    # 训练结束保存 Latest
     if mode == "RUN":
-        # 注意：这里保存的 latest 是 Stage 2 结束时的状态
-        save_checkpoint(checkpoint_root_path, total_epochs, 0.0, optimizer_s2, model, best_val_f1, fold, latest=True)
+        save_checkpoint(checkpoint_root_path, total_epochs, 0.0, optimizer, model, best_val_f1, fold, latest=True)
         print(f'[INFO] Latest checkpoint saved at: {checkpoint_root_path}')
-
 
 
 
