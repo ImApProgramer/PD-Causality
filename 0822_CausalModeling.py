@@ -48,8 +48,120 @@ sys.path.insert(0, this_path + "/../")
 _DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
+class D3Selector:
+    def __init__(self, model, loader, device, num_classes=3):
+        self.model = model
+        self.loader = loader
+        self.device = device
+        self.num_classes = num_classes
 
+    @torch.no_grad()
+    def scan_dataset(self):
+        """快速扫描整个数据集，获取每个样本的特征和不确定性"""
+        self.model.eval()
+        all_features = []
+        all_entropies = []  #熵
+        all_video_ids = []
 
+        # 使用 tqdm 进度条，因为这步需要跑一遍前向
+        for x, y, video_idx, metadata in tqdm(self.loader, desc="[D3] Scanning Data"):
+            x = x.to(self.device)
+
+            # 获取模型输出
+            outputs = self.model(x, grl_lambda=0.0)
+
+            # 1. 获取特征 (用于计算多样性 d1)
+            # features: [B, D] 确保是展平的且归一化的
+            feats = outputs['features'].detach().cpu()
+            if len(feats.shape) > 2:  # 如果是时序特征，取平均
+                feats = feats.mean(dim=(1, 2))
+            all_features.append(feats)
+
+            # 2. 获取熵 (用于计算难度 d2)
+            # logits: [B, K-1] -> 转换为概率分布
+            # 注意：你的模型是 Ordinal Regression，logits 是 K-1 个。
+            # 这里简化处理：直接用 Sigmoid 的平均不确定性，或者转为分类概率
+            logits = outputs['logits'].detach()
+            probs = torch.sigmoid(logits)  # [B, 2]
+
+            # 针对 Ordinal 任务的简化熵计算：
+            # 如果 prob 接近 0.5，说明很不确定。
+            # Entropy = -p*log(p) - (1-p)*log(1-p) 对所有二分类头求和
+            entropy = -(probs * torch.log(probs + 1e-6) + (1 - probs) * torch.log(1 - probs + 1e-6))
+            entropy = entropy.mean(dim=1).cpu()  # [B]
+            all_entropies.append(entropy)
+
+            all_video_ids.append(video_idx)
+
+        return (torch.cat(all_features),
+                torch.cat(all_entropies),
+                torch.cat(all_video_ids))
+
+    def select_coreset(self, budget_ratio=0.5):
+        """执行 D3 选择算法"""
+        features, entropies, video_ids = self.scan_dataset()
+        num_samples = len(features)
+        budget = int(num_samples * budget_ratio)
+
+        selected_indices = []
+        # mask 用于标记未被选中的样本 (True = 未选)
+        remaining_mask = torch.ones(num_samples, dtype=torch.bool)
+
+        # --- 初始化 ---
+        # 选第一个样本：选熵最大的（最难的）作为种子
+        first_idx = torch.argmax(entropies).item()
+        selected_indices.append(first_idx)
+        remaining_mask[first_idx] = False
+
+        # 维护一个距离表：每个剩余样本到“当前已选集合”的最小距离
+        # 初始化为到第一个样本的距离
+        # dist: [N]
+        current_dists = torch.cdist(features, features[first_idx].unsqueeze(0)).squeeze()
+
+        print(f"[D3] Selecting {budget}/{num_samples} samples...")
+
+        # --- 迭代选择 (Greedy Loop) ---
+        # 这里的循环是核心：最大化 (Diversity * Difficulty)
+        for _ in range(budget - 1):
+            if not remaining_mask.any(): break
+
+            # 1. Diversity (d1): 到已选集的最短距离
+            # 在每一轮，只需要更新距离表（取 min）
+            # 我们只关心剩余样本
+            valid_dists = current_dists[remaining_mask]
+
+            # 2. Difficulty (d2): 熵
+            valid_entropies = entropies[remaining_mask]
+
+            # 3. 综合打分: Score = d1 * d2 * d3(默认为1)
+            # 归一化一下数值防止量级差异太大
+            d1_norm = valid_dists / (valid_dists.max() + 1e-8)
+            d2_norm = valid_entropies / (valid_entropies.max() + 1e-8)
+
+            scores = d1_norm * d2_norm
+
+            # 找到当前剩余样本中分数最高的索引（相对索引）
+            best_rel_idx = torch.argmax(scores).item()
+
+            # 映射回全局索引
+            # 获取所有剩余样本的全局索引
+            remaining_indices = torch.nonzero(remaining_mask).squeeze()
+            if remaining_indices.dim() == 0: remaining_indices = remaining_indices.unsqueeze(0)
+            best_global_idx = remaining_indices[best_rel_idx].item()
+
+            # 加入集合
+            selected_indices.append(best_global_idx)
+            remaining_mask[best_global_idx] = False
+
+            # --- 更新距离表 ---
+            # 计算所有样本到新加入样本的距离
+            new_dists = torch.cdist(features, features[best_global_idx].unsqueeze(0)).squeeze()
+            # 更新最短距离：min(旧距离, 到新样本的距离)
+            current_dists = torch.min(current_dists, new_dists)
+
+        # 返回被选中样本的 Video IDs (用于在 Dataset 中索引)
+        selected_video_ids = video_ids[selected_indices]
+        return set(selected_video_ids.numpy().tolist())
 
 def coral_loss(logits, labels, num_classes):
     """
@@ -239,8 +351,23 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     print(f"[INFO] Starting Joint Training (Regularization Mode) for {total_epochs} epochs")
     print(f"[INFO] Weights -> Main: 1.0 | RNC: {lambda_rnc} | GRL: {lambda_grl}")
 
+    # [新增] D3 配置
+    use_d3 = True  # 开关
+    d3_start_epoch = 5  # Warm-up epoch 数量
+    d3_interval = 5  # 每隔多少 epoch 重新选择一次
+    d3_budget = 0.9  # 数据保留比例 (例如只练 60% 的数据)
+    selected_video_ids = None  # 存储被选中的 ID
+
     # ================= 2. 训练循环 =================
     for epoch in range(total_epochs):
+
+        # [新增] D3 选择阶段 (在 Epoch 开始前执行)
+        if use_d3 and epoch >= d3_start_epoch and (epoch - d3_start_epoch) % d3_interval == 0:
+            print(f"\n[D3] Triggering Data Selection at Epoch {epoch}...")
+            selector = D3Selector(model, train_loader, device, num_classes)
+            selected_video_ids = selector.select_coreset(budget_ratio=d3_budget)
+            print(f"[D3] Selected {len(selected_video_ids)} samples for training.\n")
+
         model.train()
         model.requires_grad_(True)  # 确保全模型可训练
 
@@ -256,6 +383,35 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
         for x, y, video_idx, metadata in loop:
             x, y = x.to(device), y.to(device).long()
+
+            # [新增] D3 过滤逻辑
+            # 如果当前开启了筛选，且样本不在选中列表里，则跳过
+            # 注意：Batch 中可能部分在，部分不在。最简单的增量改法是基于Batch过滤
+            # 但为了简单，如果 Batch 里包含未选中样本，我们通过 Mask 将其 Loss 置零
+
+            x, y = x.to(device), y.to(device).long()
+
+            if selected_video_ids is not None:
+                # 找出当前 batch 中哪些样本是被选中的
+                # video_idx 是 tensor，转成 list 判断
+                batch_vid_list = video_idx.tolist()
+                # 生成 mask: True 表示保留 (被选中), False 表示丢弃
+                keep_mask = torch.tensor([vid in selected_video_ids for vid in batch_vid_list], device=device)
+
+                if not keep_mask.any():
+                    # 如果整个 Batch 都没被选中，直接跳过，省算力
+                    continue
+
+                # 仅保留被选中的样本进行训练 (这是 Sample-Efficient 的关键)
+                x = x[keep_mask]
+                y = y[keep_mask]
+                if len(metadata) > 0:
+                    metadata = metadata[keep_mask]
+
+                # 重新计算 batch size (用于 logging)
+                curr_bs = x.size(0)
+            else:
+                curr_bs = x.size(0)
 
             # 准备 GRL 标签
             if len(metadata) > 0:
@@ -289,7 +445,7 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             optimizer.step()
 
             # 记录日志
-            train_loss_meter.update(total_loss.item(), x.size(0))
+            train_loss_meter.update(total_loss.item(), curr_bs)
             loop.set_postfix({
                 'L_main': f'{loss_main.item():.3f}',
                 'L_rnc': f'{loss_rnc.item():.3f}',
