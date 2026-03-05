@@ -201,3 +201,99 @@ class MemoryCausalOrdinalLoss(nn.Module):
         self.memory_bank.update(batch_feats, batch_labels)
 
         return total_loss / B
+
+
+
+class MemoryCLOCLoss(nn.Module):
+    """
+    [创新核心] Memory-Augmented Contrastive Learning for Ordinal Classification
+    将 CLOC 的多边界累加机制 (Multi-Margin N-pair) 与 Class-Balanced Memory Bank 结合。
+    """
+
+    def __init__(self, n_classes=3, device='cuda', learnable_map=None, memory_bank=None):
+        super().__init__()
+        self.n_distances = n_classes - 1
+        self.device = device
+        self.memory_bank = memory_bank
+
+        # --- 1. 创建可学习边界 (Learnable Margins) ---
+        if learnable_map == None:
+            learnable_map = [['learnable', None] for _ in range(self.n_distances)]
+
+        self.distances_ori = torch.zeros(self.n_distances, device=self.device, dtype=torch.float64)
+        learnable_indices = []
+
+        for i, (isFixed, value) in enumerate(learnable_map):
+            if isFixed == 'learnable':
+                self.distances_ori[i] = self.__inverse_softplus(
+                    0.5 + torch.rand(1) * 0.5) if value is None else self.__inverse_softplus(torch.tensor([value]))
+                learnable_indices.append(i)
+            elif isFixed == 'fixed':
+                self.distances_ori[i] = self.__inverse_softplus(torch.tensor([value]))
+
+        if len(learnable_indices) > 0:
+            learnable_indices = torch.tensor(learnable_indices, device=self.device)
+            self.learnables = nn.Parameter(self.distances_ori[learnable_indices])
+            self.mask_learnables = torch.zeros_like(self.distances_ori, dtype=torch.bool)
+            self.mask_learnables[learnable_indices] = True
+
+    def __inverse_softplus(self, t):
+        return torch.where(t > 20, t, torch.log(torch.exp(t) - 1))
+
+    def forward(self, batch_feats, batch_labels):
+        # --- 2. 获取记忆库中均衡的全量数据 ---
+        mem_feats, mem_labels = self.memory_bank.get_memory()
+
+        # 更新最新参数
+        distances = self.distances_ori.clone()
+        if hasattr(self, 'mask_learnables'):
+            distances[self.mask_learnables] = self.learnables
+
+        N = batch_feats.size(0)
+        M = mem_feats.size(0)
+
+        # --- 3. 计算 Batch 与 Memory 的相似度与标签差异 ---
+        cos_sim = F.cosine_similarity(batch_feats.unsqueeze(1), mem_feats.unsqueeze(0), dim=2)  # [N, M]
+        label_diff = torch.abs(batch_labels.unsqueeze(1) - mem_labels.unsqueeze(0)).float()
+
+        positives = label_diff <= 0
+        negatives = ~positives
+
+        pos_cossim, neg_cossim = cos_sim.clone(), cos_sim.clone()
+        pos_cossim[~positives] = torch.inf
+        neg_cossim[~negatives] = -torch.inf
+
+        # --- 4. 生成全等级距离矩阵 (数轴坐标法) ---
+        pos_distances = F.softplus(distances)
+        class_positions = torch.cumsum(torch.cat([torch.tensor([0.0], device=self.device), pos_distances]), dim=0)
+        distance_matrix = torch.abs(class_positions.unsqueeze(0) - class_positions.unsqueeze(1))
+
+        # --- 5. 为当前 (N, M) 对分配专属护城河门槛 ---
+        margins = distance_matrix[batch_labels.unsqueeze(1), mem_labels.unsqueeze(0)]
+        margins[~negatives] = 0
+
+        # --- 6. MMNP Loss 核心惩罚逻辑 ---
+        mean_n_pair_loss = []
+        loss_masks_2_list = []
+
+        for j in range(M):  # 遍历 Memory 中的每一个正样本
+            pos_col = pos_cossim[:, j]  # [N]
+            n_pair_loss = -pos_col.unsqueeze(1) + neg_cossim + margins  # [N, 1] + [N, M] + [N, M] -> [N, M]
+
+            loss_mask1 = ~torch.isinf(n_pair_loss)
+            loss_mask2 = loss_mask1.sum(dim=1)
+
+            n_pair_loss = F.relu(n_pair_loss)
+            n_pair_loss = (n_pair_loss * loss_mask1).sum(dim=1) / loss_mask2.clamp(min=1)
+
+            mean_n_pair_loss.append(n_pair_loss.unsqueeze(1))
+            loss_masks_2_list.append(loss_mask2.unsqueeze(1))
+
+        mean_n_pair_loss = torch.cat(mean_n_pair_loss, dim=1)  # [N, M]
+        loss_masks_2 = torch.cat(loss_masks_2_list, dim=1)  # [N, M]
+        final_loss = (mean_n_pair_loss * (loss_masks_2 > 0)).sum(dim=1) / (loss_masks_2 > 0).sum(dim=1).clamp(min=1)
+
+        # --- 7. 更新记忆库 ---
+        self.memory_bank.update(batch_feats, batch_labels)
+
+        return final_loss.mean()

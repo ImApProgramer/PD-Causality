@@ -331,7 +331,22 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     # [组件] 初始化 Memory Bank 和 RNC Loss (修复：之前漏了定义)
     # 必须有这个才能算 loss_rnc
     memory_bank = OrdinalClassBalancedMemory(num_classes=3, feat_dim=128, device=device)
-    ciml_criterion = MemoryCausalOrdinalLoss(temperature=2.0, memory_bank=memory_bank).to(device)
+
+    # 【体现专家干预】
+    # 0级(健康)->1级(轻微)：让模型自己学 (learnable)
+    # 1级(轻微)->2级(严重)：强制加宽边界 (fixed, 比如设为1.5，极大地防止严重误判)
+    learnable_map = [
+        ['learnable', None],
+        ['fixed', 1.5]
+    ]
+    ciml_criterion = MemoryCLOCLoss(
+        n_classes=3,
+        device=device,
+        learnable_map=learnable_map,
+        memory_bank=memory_bank
+    ).to(device)
+
+    phase_two_epoch = 15
 
     # [优化器] 统一优化器 (负责全模型)
     optimizer = torch.optim.AdamW(
@@ -360,6 +375,12 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
 
     # ================= 2. 训练循环 =================
     for epoch in range(total_epochs):
+
+        # [修改点 3] 第二阶段冻结 CLOC 的学习边界
+        if epoch == phase_two_epoch and hasattr(ciml_criterion, 'learnables'):
+            print(
+                f"\n[Phase 2] Freezing CLOC margins at epoch {epoch}. Margins value: {F.softplus(ciml_criterion.learnables).detach().cpu().numpy()}")
+            ciml_criterion.learnables.requires_grad = False  # 冻结护城河宽度
 
         # [新增] D3 选择阶段 (在 Epoch 开始前执行)
         if use_d3 and epoch >= d3_start_epoch and (epoch - d3_start_epoch) % d3_interval == 0:
