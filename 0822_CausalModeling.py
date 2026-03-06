@@ -366,12 +366,12 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
     print(f"[INFO] Starting Joint Training (Regularization Mode) for {total_epochs} epochs")
     print(f"[INFO] Weights -> Main: 1.0 | RNC: {lambda_rnc} | GRL: {lambda_grl}")
 
-    # [新增] D3 配置
-    use_d3 = True  # 开关
-    d3_start_epoch = 5  # Warm-up epoch 数量
-    d3_interval = 5  # 每隔多少 epoch 重新选择一次
-    d3_budget = 0.9  # 数据保留比例 (例如只练 60% 的数据)
-    selected_video_ids = None  # 存储被选中的 ID
+    # # [新增] D3 配置
+    # use_d3 = True  # 开关
+    # d3_start_epoch = 5  # Warm-up epoch 数量
+    # d3_interval = 5  # 每隔多少 epoch 重新选择一次
+    # d3_budget = 0.9  # 数据保留比例 (例如只练 60% 的数据)
+    # selected_video_ids = None  # 存储被选中的 ID
 
     # ================= 2. 训练循环 =================
     for epoch in range(total_epochs):
@@ -382,12 +382,12 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
                 f"\n[Phase 2] Freezing CLOC margins at epoch {epoch}. Margins value: {F.softplus(ciml_criterion.learnables).detach().cpu().numpy()}")
             ciml_criterion.learnables.requires_grad = False  # 冻结护城河宽度
 
-        # [新增] D3 选择阶段 (在 Epoch 开始前执行)
-        if use_d3 and epoch >= d3_start_epoch and (epoch - d3_start_epoch) % d3_interval == 0:
-            print(f"\n[D3] Triggering Data Selection at Epoch {epoch}...")
-            selector = D3Selector(model, train_loader, device, num_classes)
-            selected_video_ids = selector.select_coreset(budget_ratio=d3_budget)
-            print(f"[D3] Selected {len(selected_video_ids)} samples for training.\n")
+        # # [新增] D3 选择阶段 (在 Epoch 开始前执行)
+        # if use_d3 and epoch >= d3_start_epoch and (epoch - d3_start_epoch) % d3_interval == 0:
+        #     print(f"\n[D3] Triggering Data Selection at Epoch {epoch}...")
+        #     selector = D3Selector(model, train_loader, device, num_classes)
+        #     selected_video_ids = selector.select_coreset(budget_ratio=d3_budget)
+        #     print(f"[D3] Selected {len(selected_video_ids)} samples for training.\n")
 
         model.train()
         model.requires_grad_(True)  # 确保全模型可训练
@@ -411,28 +411,9 @@ def train_model(params, class_weights, train_loader, val_loader, model, fold, ba
             # 但为了简单，如果 Batch 里包含未选中样本，我们通过 Mask 将其 Loss 置零
 
             x, y = x.to(device), y.to(device).long()
+            curr_bs = x.size(0)
 
-            if selected_video_ids is not None:
-                # 找出当前 batch 中哪些样本是被选中的
-                # video_idx 是 tensor，转成 list 判断
-                batch_vid_list = video_idx.tolist()
-                # 生成 mask: True 表示保留 (被选中), False 表示丢弃
-                keep_mask = torch.tensor([vid in selected_video_ids for vid in batch_vid_list], device=device)
 
-                if not keep_mask.any():
-                    # 如果整个 Batch 都没被选中，直接跳过，省算力
-                    continue
-
-                # 仅保留被选中的样本进行训练 (这是 Sample-Efficient 的关键)
-                x = x[keep_mask]
-                y = y[keep_mask]
-                if len(metadata) > 0:
-                    metadata = metadata[keep_mask]
-
-                # 重新计算 batch size (用于 logging)
-                curr_bs = x.size(0)
-            else:
-                curr_bs = x.size(0)
 
             # 准备 GRL 标签
             if len(metadata) > 0:
