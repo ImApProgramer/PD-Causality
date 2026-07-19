@@ -16,6 +16,7 @@ from model.ctrgcn.ctrgcn import Model as CTRGCN
 from torch.optim.lr_scheduler import StepLR
 import pandas as pd
 from sklearn.metrics import classification_report, confusion_matrix
+from collections import defaultdict, Counter
 
 
 # ==============================================================================
@@ -30,6 +31,9 @@ SOURCE_SEQ_LEN = 81
 ROOT_JOINT = 0
 
 USE_CAUSAL = False
+USE_DATA_AUGMENTATION = False
+USE_PRETRAINED = False #未实现
+CENTER_POSE = True #未实现
 
 # ==============================================================================
 # -1. 核心算法模块
@@ -219,57 +223,53 @@ def center_poses(poses):
     # H36M 的骨盆(Pelvis)索引是 0
     return poses - poses[:, 0:1, :]
 
-
 def convert_h36m_to_ntu25(sequence):
-    """将 H36M(17节点) 强制映射为 NTU(25节点) 格式以适配 CTR-GCN"""
-    # sequence 形状: (T, 17, 3)
-    new_keypoints = np.zeros((sequence.shape[0], 25, 3))
+    if sequence.ndim != 3 or sequence.shape[1:] != (17, 3):
+        raise ValueError(
+            f"Expected (T, 17, 3), got {sequence.shape}"
+        )
 
-    # 躯干和脊柱
-    new_keypoints[:, 0, :] = sequence[:, 0, :]  # 0: Base of Spine = Pelvis
-    new_keypoints[:, 1, :] = sequence[:, 7, :]  # 1: Mid Spine = Spine
-    new_keypoints[:, 16, :] = sequence[:, 8, :]  # 16: Right Hip (NTU标准)
+    output = np.zeros(
+        (sequence.shape[0], 25, 3),
+        dtype=sequence.dtype
+    )
 
-    # 脖子和头
-    new_keypoints[:, 2, :] = sequence[:, 8, :]  # 2: Neck
-    new_keypoints[:, 3, :] = sequence[:, 10, :]  # 3: Head
+    # Torso
+    output[:, 0] = sequence[:, 0]    # Spine Base / pelvis
+    output[:, 1] = sequence[:, 7]    # Spine Mid
+    output[:, 20] = sequence[:, 8]   # Spine Shoulder
+    output[:, 2] = sequence[:, 9]    # Neck
+    output[:, 3] = sequence[:, 10]   # Head
 
-    # 左臂
-    new_keypoints[:, 4, :] = sequence[:, 11, :]  # 4: Left Shoulder
-    new_keypoints[:, 5, :] = sequence[:, 12, :]  # 5: Left Elbow
-    new_keypoints[:, 6, :] = sequence[:, 13, :]  # 6: Left Wrist
-    new_keypoints[:, 7, :] = sequence[:, 13, :]  # 7: Left Hand
-    new_keypoints[:, 17, :] = sequence[:, 13, :]  # 17: Left Hand Tip (用Wrist补)
-    new_keypoints[:, 18, :] = sequence[:, 13, :]  # 18: Left Thumb (用Wrist补)
+    # Left arm
+    output[:, 4] = sequence[:, 11]
+    output[:, 5] = sequence[:, 12]
+    output[:, 6] = sequence[:, 13]
+    output[:, 7] = sequence[:, 13]
+    output[:, 21] = sequence[:, 13]
+    output[:, 22] = sequence[:, 13]
 
-    # 右臂
-    new_keypoints[:, 8, :] = sequence[:, 14, :]  # 8: Right Shoulder
-    new_keypoints[:, 9, :] = sequence[:, 15, :]  # 9: Right Elbow
-    new_keypoints[:, 10, :] = sequence[:, 16, :]  # 10: Right Wrist
-    new_keypoints[:, 11, :] = sequence[:, 16, :]  # 11: Right Hand
-    new_keypoints[:, 19, :] = sequence[:, 16, :]  # 19: Right Hand Tip (用Wrist补)
-    new_keypoints[:, 20, :] = sequence[:, 16, :]  # 20: Right Thumb (用Wrist补)
+    # Right arm
+    output[:, 8] = sequence[:, 14]
+    output[:, 9] = sequence[:, 15]
+    output[:, 10] = sequence[:, 16]
+    output[:, 11] = sequence[:, 16]
+    output[:, 23] = sequence[:, 16]
+    output[:, 24] = sequence[:, 16]
 
-    # 左腿
-    new_keypoints[:, 12, :] = sequence[:, 4, :]  # 12: Left Hip
-    new_keypoints[:, 13, :] = sequence[:, 5, :]  # 13: Left Knee
-    new_keypoints[:, 14, :] = sequence[:, 6, :]  # 14: Left Ankle
-    new_keypoints[:, 15, :] = sequence[:, 6, :]  # 15: Left Foot
-    new_keypoints[:, 21, :] = sequence[:, 6, :]  # 21: Left Heel
-    new_keypoints[:, 22, :] = sequence[:, 6, :]  # 22: Left Toe
+    # Left leg
+    output[:, 12] = sequence[:, 4]
+    output[:, 13] = sequence[:, 5]
+    output[:, 14] = sequence[:, 6]
+    output[:, 15] = sequence[:, 6]
 
-    # 右腿
-    new_keypoints[:, 16, :] = sequence[:, 1, :]  # 16: Right Hip
-    new_keypoints[:, 17, :] = sequence[:, 2, :]  # 17: Right Knee
-    new_keypoints[:, 18, :] = sequence[:, 3, :]  # 18: Right Ankle
-    new_keypoints[:, 19, :] = sequence[:, 3, :]  # 19: Right Foot
+    # Right leg
+    output[:, 16] = sequence[:, 1]
+    output[:, 17] = sequence[:, 2]
+    output[:, 18] = sequence[:, 3]
+    output[:, 19] = sequence[:, 3]
 
-    # 脊柱补充
-    new_keypoints[:, 20, :] = sequence[:, 8, :]  # 20: Spine Shoulder
-    new_keypoints[:, 23, :] = sequence[:, 16, :]  # 23: Hand Tip Right
-    new_keypoints[:, 24, :] = sequence[:, 16, :]  # 24: Thumb Right
-
-    return new_keypoints
+    return output
 
 
 def get_gcn_clips(video_sequence, clip_length):
@@ -422,8 +422,8 @@ class CarePDSkeletonDataset(Dataset):
             'labels_str': name
         }
 
-        # 开启在线数据增强
-        if self.transform:
+        # 只有训练集且设置了 transform 才增强
+        if self.is_train and self.transform is not None:
             sample = self.transform(sample)
 
         data_tensor = sample['encoder_inputs']
@@ -527,54 +527,88 @@ params = {
 # 8. 设置运行
 # ==========================================
 
+
+
+
+def aggregate_by_walk(preds, labels, names):
+    walk_preds = defaultdict(list)
+    walk_labels = {}
+
+    for pred, label, name in zip(preds, labels, names):
+        walk_preds[name].append(int(pred))
+        walk_labels[name] = int(label)
+
+    final_preds = []
+    final_labels = []
+    final_names = []
+
+    for name, clip_preds in walk_preds.items():
+        majority_pred = Counter(clip_preds).most_common(1)[0][0]
+
+        final_preds.append(majority_pred)
+        final_labels.append(walk_labels[name])
+        final_names.append(name)
+
+    return final_preds, final_labels, final_names
+
 def log_results_fallback(report, conf_matrix, txt_name, img_name, output_dir):
     with open(os.path.join(output_dir, txt_name), 'w') as f:
         f.write(report)
         f.write('\n\nConfusion Matrix:\n')
         f.write(str(conf_matrix))
 
-def validate_model(model, val_loader, device, num_classes=4):   #没被用到，这在24-FG代码中是一个典型的臃肿代码
-    model.eval()
-    correct, total = 0, 0
-    with torch.no_grad():
-        for x, y in val_loader:
-            x, y = x.to(device), y.to(device).long()
-            outputs = model(x)
-
-            # CORAL 预测推理：统计有几个 logit > 0
-            probs = torch.sigmoid(outputs["logits"])
-            preds = (probs > 0.5).sum(dim=1)
-
-            correct += (preds == y).sum().item()
-            total += y.size(0)
-    return correct / total
-
-
 
 
 def evaluate_model(model, loader, device):
     model.eval()
-    all_preds, all_labels, all_names = [], [], []
+
+    all_preds = []
+    all_labels = []
+    all_names = []
+
     with torch.no_grad():
         for x, y, names in loader:
-            x = x.to(device)
+            x = x.to(
+                device,
+                dtype=torch.float32,
+                non_blocking=True
+            )
 
             if USE_CAUSAL:
-                # --- 真模型 (因果序数模型) 推理逻辑 ---
+                # CORAL / ordinal model
                 outputs = model(x)
-                probs = torch.sigmoid(outputs["logits"])
-                preds = (probs > 0.5).sum(dim=1)
+                ordinal_logits = outputs["logits"]
+
+                # sigmoid(logit) > 0.5 等价于 logit > 0
+                preds = (ordinal_logits > 0).sum(dim=1)
+
             else:
-                # --- 极简 Baseline (纯 CTR-GCN) 推理逻辑 ---
+                # CTR-GCN baseline
                 logits = model(x)
                 preds = torch.argmax(logits, dim=1)
 
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(y.numpy())
-            all_names.extend(names)
+            all_preds.extend(
+                preds.detach().cpu().numpy().tolist()
+            )
 
-    # 返回 Accuracy 和收集到的所有详细列表
-    acc = np.mean(np.array(all_preds) == np.array(all_labels))
+            all_labels.extend(
+                y.detach().cpu().numpy().tolist()
+            )
+
+            all_names.extend(list(names))
+
+    if len(all_labels) == 0:
+        raise RuntimeError(
+            "Evaluation loader is empty. No samples were evaluated."
+        )
+
+    all_preds_np = np.asarray(all_preds, dtype=np.int64)
+    all_labels_np = np.asarray(all_labels, dtype=np.int64)
+
+    acc = float(
+        np.mean(all_preds_np == all_labels_np)
+    )
+
     return acc, all_preds, all_labels, all_names
 
 
@@ -586,8 +620,10 @@ def run_6_fold_experiment():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # 宏观收集容器
-    total_outs_best, total_outs_last = [], []
-    total_gts, total_video_names, total_states = [], [], []
+    total_outs_last = []
+    total_gts = []
+    total_video_names = []
+    total_states = []
 
     print("=" * 60)
     print(f"🚀 开始 6-Fold 全自动训练与评测打榜 | 设备: {device}")
@@ -600,8 +636,33 @@ def run_6_fold_experiment():
         # 1. 挂载当前折数据
         train_pkl = f'care-pd-dataset/ctrgcn_processing/PD_center_True/PD_train_{fold}.pkl'
         test_pkl = f'care-pd-dataset/ctrgcn_processing/PD_center_True/PD_test_{fold}.pkl'
-        train_loader = DataLoader(CarePDSkeletonDataset(train_pkl), batch_size=64, shuffle=True)
-        test_loader = DataLoader(CarePDSkeletonDataset(test_pkl), batch_size=64, shuffle=False)
+
+        current_train_transforms = train_transforms if USE_DATA_AUGMENTATION else None      #0720:开关数据增强的按钮
+
+        print(
+            f"[CONFIG] Data augmentation: "
+            f"{'ON' if USE_DATA_AUGMENTATION else 'OFF'}"
+        )
+
+        train_loader = DataLoader(
+            CarePDSkeletonDataset(
+                train_pkl,
+                is_train=True,
+                transform=current_train_transforms
+            ),
+            batch_size=64,
+            shuffle=True
+        )
+
+        test_loader = DataLoader(
+            CarePDSkeletonDataset(
+                test_pkl,
+                is_train=False,
+                transform=None
+            ),
+            batch_size=64,
+            shuffle=False
+        )
 
         # 2. 重新初始化模型（必须放在循环里，确保每折是全新权重）
         # model_backbone = CTRGCN(num_class=4, num_point=25, num_person=1, graph='graph.ntu_rgb_d.Graph', in_channels=3)
@@ -629,86 +690,197 @@ def run_6_fold_experiment():
 
         scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
 
-        best_acc = 0.0
-        best_preds_for_this_fold = []
 
         # 3. 开始该折训练
         for epoch in range(EPOCHS):
             model.train()
-            loop = tqdm(train_loader, desc=f'Fold {fold} Epoch {epoch + 1}/{EPOCHS}')
+
+            running_loss = 0.0
+            num_batches = 0
+
+            loop = tqdm(
+                train_loader,
+                desc=f'Fold {fold} Epoch {epoch + 1}/{EPOCHS}'
+            )
+
             for x, y, _ in loop:
-                x, y = x.to(device), y.to(device).long()
+                x = x.to(device)
+                y = y.to(device).long()
+
                 optimizer.zero_grad()
 
                 if USE_CAUSAL:
                     outputs = model(x)
-                    main_loss = coral_loss(outputs["logits"], y, num_classes=4)
-                    ciml_loss = ciml_criterion(outputs['features'], y, epoch=epoch)
+
+                    main_loss = coral_loss(
+                        outputs["logits"],
+                        y,
+                        num_classes=4
+                    )
+
+                    ciml_loss = ciml_criterion(
+                        outputs["features"],
+                        y,
+                        epoch=epoch
+                    )
+
                     loss = main_loss + 0.1 * ciml_loss
+
                 else:
-                    # --- 极简 Baseline 的计算图 ---
+                    # CTR-GCN baseline
                     logits = model(x)
                     loss = criterion(logits, y)
 
                 loss.backward()
                 optimizer.step()
-                loop.set_postfix(Loss=f"{loss.item():.4f}")
+
+                running_loss += loss.item()
+                num_batches += 1
+
+                # 显示当前 batch loss，而不是 epoch 平均值
+                loop.set_postfix(
+                    BatchLoss=f"{loss.item():.4f}"
+                )
 
             scheduler.step()
 
-            # 验证并保存最佳模型
-            val_acc, val_preds, val_labels, val_names = evaluate_model(model, test_loader, device)
-            print(f"   -> Fold {fold} Epoch {epoch + 1} 结束 | Val Acc: {val_acc * 100:.2f}%")
+            # 当前 epoch 的平均训练损失
+            epoch_loss = running_loss / max(num_batches, 1)
 
-            if val_acc > best_acc:
-                best_acc = val_acc
-                best_preds_for_this_fold = val_preds
-                torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, f"best_model_fold{fold}.pt"))
+            current_lr = optimizer.param_groups[0]['lr']
 
-        # 4. 单折结束，收集最终状态（Last Model 和 Best Model 的预测）
-        print(f"🎉 Fold {fold} 训练完毕，最佳准确率: {best_acc * 100:.2f}%")
+            print(
+                f"   -> Fold {fold} Epoch {epoch + 1}/{EPOCHS} "
+                f"| Train Loss: {epoch_loss:.4f} "
+                f"| LR: {current_lr:.6f}"
+            )
 
-        # 保存 Last Checkpoint
-        torch.save(model.state_dict(), os.path.join(OUTPUT_DIR, f"last_model_fold{fold}.pt"))
-        _, last_preds, last_labels, last_names = evaluate_model(model, test_loader, device)
+        # ============================================================
+        # 4. 当前 Fold 训练结束
+        #    现在才第一次使用 test_loader
+        # ============================================================
+        print(
+            f"🎉 Fold {fold} 训练完成，"
+            f"开始在外层测试集上进行最终评价。"
+        )
 
-        # 将当前折的数据推入宏观大池子
-        total_outs_best.extend(best_preds_for_this_fold)
-        total_outs_last.extend(last_preds)
-        total_gts.extend(last_labels)  # Ground truth 不变
-        total_video_names.extend(last_names)  # Video names 不变
+        # 保存固定 epoch 的最终模型
+        checkpoint_path = os.path.join(
+            OUTPUT_DIR,
+            f"last_model_fold{fold}.pt"
+        )
 
-        # ⚠️ CARE-PD 状态修正：全部标为 UNKNOWN
-        total_states.extend(['UNKNOWN'] * len(last_labels))
+        torch.save(
+            model.state_dict(),
+            checkpoint_path
+        )
+
+        # 测试集只评价一次
+        test_acc, test_preds, test_labels, test_names = evaluate_model(
+            model,
+            test_loader,
+            device
+        )
+
+        print(
+            f"   -> Fold {fold} Final Test Acc: "
+            f"{test_acc * 100:.2f}%"
+        )
+
+        print(
+            f"   -> Final checkpoint saved to: "
+            f"{checkpoint_path}"
+        )
+
+        # 将当前 Fold 的最终预测加入六折汇总
+        total_outs_last.extend(test_preds)
+        total_gts.extend(test_labels)
+        total_video_names.extend(test_names)
+
+        # CARE-PD 当前没有使用 medication state
+        total_states.extend(
+            ['UNKNOWN'] * len(test_labels)
+        )
 
     # ==============================================================================
     #  6 折全部跑完：生成终极报告
     # ==============================================================================
+
+
     print("\n" + "=" * 60)
-    print("🏆 6 折交叉验证全部结束，开始生成全局 Report！")
+    print("🏆 6 折交叉验证全部结束，开始生成最终报告")
 
-    # 调用你的 process_reports (对 ON/OFF 进行容错)
-    for prefix, outputs in [('best', total_outs_best), ('last', total_outs_last)]:
-        print(f"\n========== {prefix.upper()} 全局报告 ==========")
-        report_final = classification_report(total_gts, outputs, zero_division=0)
-        confusion_final = confusion_matrix(total_gts, outputs)
-        print(report_final)
+    # ------------------------------------------------------------------------------
+    # A. Clip-level 报告
+    # ------------------------------------------------------------------------------
+    print("\n========== CLIP-LEVEL REPORT ==========")
 
-        # 写入硬盘
-        log_results_fallback(report_final, confusion_final, f'{prefix}_report_allfolds.txt', None, OUTPUT_DIR)
+    clip_report = classification_report(
+        total_gts,
+        total_outs_last,
+        labels=[0, 1, 2, 3],
+        zero_division=0,
+        digits=4
+    )
 
-    # 导出包含所有视频名及对应结果的最终 DataFrame 字典
-    results = pd.DataFrame({
-        'total_video_names': total_video_names,
-        'total_outs_best': total_outs_best,
-        'total_outs_last': total_outs_last,
-        'total_gts': total_gts
-    })
+    clip_confusion = confusion_matrix(
+        total_gts,
+        total_outs_last,
+        labels=[0, 1, 2, 3]
+    )
 
-    with open(os.path.join(OUTPUT_DIR, 'final_results.pkl'), 'wb') as file:
-        pickle.dump(results, file)
+    print(clip_report)
+    print("\nClip-level Confusion Matrix:")
+    print(clip_confusion)
 
-    print(f"📁 所有的模型权重、Report.txt 和 final_results.pkl 均已保存在: {OUTPUT_DIR}")
+    log_results_fallback(
+        clip_report,
+        clip_confusion,
+        "clip_level_report_allfolds.txt",
+        None,
+        OUTPUT_DIR
+    )
+
+    # ------------------------------------------------------------------------------
+    # B. Walk-level 聚合
+    # ------------------------------------------------------------------------------
+    walk_preds, walk_labels, walk_names = aggregate_by_walk(
+        total_outs_last,
+        total_gts,
+        total_video_names
+    )
+
+    print("\n========== WALK-LEVEL REPORT ==========")
+    print(
+        f"Clip count: {len(total_gts)} | "
+        f"Walk count: {len(walk_labels)}"
+    )
+
+    walk_report = classification_report(
+        walk_labels,
+        walk_preds,
+        labels=[0, 1, 2, 3],
+        zero_division=0,
+        digits=4
+    )
+
+    walk_confusion = confusion_matrix(
+        walk_labels,
+        walk_preds,
+        labels=[0, 1, 2, 3]
+    )
+
+    print(walk_report)
+    print("\nWalk-level Confusion Matrix:")
+    print(walk_confusion)
+
+    log_results_fallback(
+        walk_report,
+        walk_confusion,
+        "walk_level_report_allfolds.txt",
+        None,
+        OUTPUT_DIR
+    )
 
 
 run_6_fold_experiment()
