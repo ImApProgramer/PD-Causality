@@ -22,6 +22,31 @@ from collections import defaultdict, Counter
 # ==============================================================================
 # 总参数配置
 # ==============================================================================
+
+#全局种子
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+    if STRICT_REPRODUCIBILITY:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        # 开发阶段：较快
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+
+
+SEED = 42
+# True：速度慢，但相同种子应尽量得到完全一致的结果
+# False：速度快，相同种子通常接近，但不保证逐位一致
+STRICT_REPRODUCIBILITY = False
+
 NPZ_PATH = 'care-pd-dataset/h36m_3d_world_floorXZZplus_30f_or_longer.npz'
 PKL_LABEL_PATH = 'care-pd-dataset/PD-GaM.pkl'
 FOLD_PATH = 'care-pd-pdgam-folds/PD-GaM_6fold_participants.pkl'
@@ -633,6 +658,9 @@ def run_6_fold_experiment():
         print(f"🌟 正在执行 Fold {fold}/{NUM_FOLDS}")
         print("=" * 40)
 
+        #初始化种子
+        set_seed(SEED + fold)
+
         # 1. 挂载当前折数据
         train_pkl = f'care-pd-dataset/ctrgcn_processing/PD_center_True/PD_train_{fold}.pkl'
         test_pkl = f'care-pd-dataset/ctrgcn_processing/PD_center_True/PD_test_{fold}.pkl'
@@ -881,7 +909,6 @@ def run_6_fold_experiment():
         None,
         OUTPUT_DIR
     )
-
 
 run_6_fold_experiment()
 
